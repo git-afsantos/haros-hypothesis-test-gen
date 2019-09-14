@@ -1,2 +1,2 @@
-# haros-hypothesis-test-gen
-HAROS plugin to generate Hypothesis tests from HPL specifications
+# haros-plugin-pbt-gen
+HAROS plugin to generate Property-based tests from HPL specifications
