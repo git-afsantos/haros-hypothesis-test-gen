@@ -181,18 +181,6 @@ class SubscriberTemplate(object):
         self.events = [] # [EventTemplate]
 
 
-class PublisherTemplate(object):
-    def __init__(self, topic, type_token):
-        self.topic = topic # string
-        self.type_token = type_token
-        self.rospy_type = type_token.type_name.replace("/", ".")
-        self.strategies = []
-
-    @property
-    def type_name(self):
-        return self.type_token.type_name
-
-
 ################################################################################
 # Monitors
 ################################################################################
