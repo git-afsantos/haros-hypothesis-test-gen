@@ -30,9 +30,9 @@ from collections import namedtuple
 import os
 
 from haros.hpl.hpl_ast import HplAstObject
+from haros.hpl.ros_types import get_type
 from jinja2 import Environment, PackageLoader
 
-from .ros_types import get_type
 from .events import MonitorTemplate
 from .data import MessageStrategyGenerator
 from .selectors import Selector
@@ -74,8 +74,8 @@ def configuration_analysis(iface, config):
     try:
         gen = TestGenerator(iface, config, properties, assumptions, settings)
         gen.make_tests(dirpath)
-    except (TypeError, ValueError, KeyError) as e:
-        return iface.log_error(str(e))
+    except SpecError as e:
+        iface.log_error(e.message)
 
 
 ################################################################################
@@ -92,6 +92,10 @@ Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
 CustomMsgStrategy = namedtuple("CustomMsgStrategy",
     ("name", "pkg", "msg", "statements"))
+
+
+class SpecError(Exception):
+    pass
 
 
 ################################################################################
@@ -136,8 +140,10 @@ class TestGenerator(object):
                     mon, custom.strategies, publishers, self.subscribers,
                     custom.pkg_imports, mon.hpl_string))
             else:
-                self.iface.log_warning("Cannot produce a test script for the "
-                    "following property: '%s'", mon.hpl_string)
+                msg = ("Cannot produce a test script for the "
+                       "following property: ")
+                msg += mon.hpl_string
+                self.iface.log_warning(msg)
         for testable in tests:
             script_path = os.path.join(dirpath,
                 testable.monitor.class_name + ".py")
@@ -193,9 +199,11 @@ class TestGenerator(object):
         while queue:
             new_queue = []
             for type_token in queue:
-                if type_token.is_primitive:
+                if type_token.is_primitive or type_token.is_header:
                     continue
-                if type_token.type_name in strategies:
+                if type_token.is_time or type_token.is_duration:
+                    continue
+                if type_token.is_array or type_token.type_name in strategies:
                     continue
                 self.pkg_imports.add(type_token.package)
                 strategies[type_token.type_name] = type_token
@@ -203,26 +211,44 @@ class TestGenerator(object):
             queue = new_queue
         return tuple(strategies.values())
 
+    NO_SUB = "Configuration '{}' does not subscribe topic '{}'"
+
     def _type_check_topics(self):
         for prop in self.properties:
             for event in prop.events():
                 if event.is_publish:
                     base_type = self.pubbed_topics.get(event.topic)
                     if base_type is None:
-                        base_type = self.subbed_topics[event.topic] # raises
+                        try:
+                            base_type = self.subbed_topics[event.topic]
+                        except KeyError:
+                            raise SpecError(self.NO_SUB.format(
+                                self.config.name, event.topic))
                     self._type_check_msg_filter(event.msg_filter, base_type)
         for topic, msg_filter in self.assumptions.items():
             base_type = self.pubbed_topics.get(topic)
             if base_type is None:
-                base_type = self.subbed_topics[event.topic] # raises
+                try:
+                    base_type = self.subbed_topics[event.topic]
+                except KeyError:
+                    raise SpecError(self.NO_SUB.format(
+                        self.config.name, event.topic))
             self._type_check_msg_filter(msg_filter, base_type)
 
-    def _type_check_msg_filter(self, event.msg_filter, base_type):
+    NO_FIELD = "Message type '{}' does not contain field '{}'"
+
+    NAN = "Expected a number, but found {} ({})"
+
+    def _type_check_msg_filter(self, msg_filter, base_type):
         for condition in msg_filter.conditions:
-            selector = Selector(condition.field.token, base_type) # raises
+            try:
+                selector = Selector(condition.field.token, base_type)
+            except KeyError:
+                raise SpecError(self.NO_FIELD.format(
+                    base_type.type_name, condition.field.token))
             if condition.requires_number:
                 if not selector.ros_type.is_number:
-                    raise TypeError("not a number: {} ({})".format(
+                    raise SpecError(self.NAN.format(
                         condition.field.token, base_type.type_name))
             # TODO check that values fit within types
 
@@ -339,7 +365,7 @@ class CustomStrategyBuilder(object):
                     pub = publishers[event.topic]
                     self.pkg_imports.add(pub.type_token.package)
                     self.strategies.append(self._event(event, pub))
-        return strategies
+        return self.strategies
 
     def _publisher(self, publisher, msg_filter):
         type_token = publisher.type_token
@@ -407,7 +433,7 @@ class CustomStrategyBuilder(object):
         return CustomMsgStrategy(
             name, type_token.package, type_token.message, strategy.build())
 
-    def _value(hpl_value):
+    def _value(self, hpl_value):
         if hpl_value.is_reference:
             type_token = self.types_by_message[hpl_value.message]
             # check for constants
