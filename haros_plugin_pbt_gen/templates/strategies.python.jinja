@@ -1,0 +1,479 @@
+{##############################################################################
+ # Message Strategy Macros
+ ##############################################################################}
+
+{# Converts a message type (e.g. 'std_msgs/String') into a strategy name. #}
+{% macro _type_to_strategy(name) -%}
+ros_{{ name|replace('/', '_') }}
+{%- endmacro %}
+
+{# Converts a package and message names into a strategy name. #}
+{% macro _strategy_name(pkg, msg) -%}
+ros_{{ pkg }}_{{ msg }}
+{%- endmacro %}
+
+{# Simple message field initialisation. Draws and assigns a value if the
+    field is of a primitive type, otherwise initialises the field in-place,
+    since building a ROS message already initialises all field trees below. #}
+{% macro _init_simple_field(name, type_token) %}
+{% if type_token.is_primitive %}
+msg.{{ name }} = draw({{ _type_to_strategy(type_token.type_name) }}())
+{% else %} {# modify in-place, ignore return value #}
+draw({{ _type_to_strategy(type_token.type_name) }}(msg=msg.{{ name }}))
+{% endif %}
+{% endmacro %}
+
+{# Writes a statement for a custom message strategy.
+    Statements can be simple assignments or assumptions, or they could be
+    loops or statement blocks, in which case this macro becomes recursive. #}
+{% macro _statement(statement) %}
+{% if statement.is_assignment -%}
+{{ statement.field }} = {{ statement.expression }}
+{%- elif statement.is_assumption -%}
+assume({{ statement.expression }})
+{%- elif statement.is_block -%}
+{% for child in statement.statements %}
+{{ _statement(child) }}
+{% endfor %}
+{%- elif statement.is_loop -%}
+for {{ statement.variable }} in {{ statement.expression }}:
+{{ _statement(statement.statement)|indent(width=4, first=True) }}
+{%- endif %}
+{% endmacro %}
+
+
+{##############################################################################
+ # Test Trace Macros
+ ##############################################################################}
+
+{# Transforms a sequence of events into a sequence of message chunks,
+    with one message per chunk. #}
+{% macro _chunks_for_sequence(event) -%}
+msg = (draw({{ event.strategy }}()), "{{ event.topic }}")
+chunks.append(Chunk(msgs=[msg], delay={{ event.delay }}))
+    {% if event.forks and not event.is_leaf %}
+    {# NOTE in a normal sequence, an event should only have one fork #}
+{{ _chunks_for_sequence(event.forks[0]) }}
+    {% endif %}
+{%- endmacro %}
+
+{# Transforms a top-level disjunction of event chains into a sequence of
+    message chunks, with one message per chunk.
+    A random disjunction branch is selected at runtime. #}
+{% macro _chunks_for_disjunction(roots) -%}
+    {% if roots|length > 1 -%}
+branch = r.randint(0, {{ roots|length }})
+        {% for root in roots %}
+if branch == {{ loop.index0 }}:
+{{ _chunks_for_sequence(root)|indent(width=4, first=true) }}
+{#- #}
+        {% endfor %}
+    {%- else -%}
+{{ _chunks_for_sequence(roots|first) }}
+    {%- endif %}
+{%- endmacro %}
+
+{# Breaks a list of random messages into a list of message chunks.
+    The number of chunks is selected at random, and the chunk sizes
+    are approximately equal (+- 1). #}
+{% macro _chunks_no_trigger() -%}
+if all_msgs:
+    n = draw(strategies.integers(min_value=1, max_value=len(all_msgs)))
+    floats = strategies.floats(min_value=0.0, max_value=1.0)
+    chunks = [Chunk(delay=draw(floats)) for i in range(n)]
+    i = 0
+    for msg in all_msgs:
+        chunks[i].messages.append(msg)
+        i = (i + 1) % n
+else:
+    chunks = []
+{%- endmacro %}
+
+{# Breaks a trigger sequence of events into a list of message chunks, with
+    one trigger message per chunk, plus an additional chunk at the start.
+    Also distributes a list of random messages over the chunks, making no
+    effort for chunk sizes to be even. #}
+{% macro _chunks_with_trigger(trigger) -%}
+# chunks for trigger sequence
+chunks = [Chunk()]
+{{ _chunks_for_disjunction(trigger.roots) }}
+n = len(all_msgs)
+k = 0
+i = 0
+while n - k > 0:
+    take = r.randint(0, n - k)
+    if take:
+        chunks[i].messages.extend(all_msgs[k:k+take])
+        k += take
+    i = (i + 1) % len(chunks)
+if not chunks[0].messages:
+    chunks.pop(0)
+{%- endmacro %}
+
+{% macro _chunks_for_activator(activator) -%}
+# chunks for activator sequence
+main_chunks = chunks
+chunks = []
+{{ _chunks_for_disjunction(activator.roots) }}
+{#- #}
+chunks.extend(main_chunks)
+{%- endmacro %}
+
+
+{% macro _setup_sut(commands, nodes, settings) %}
+def _setup_sut(self):
+    {% for cmd in commands %}
+    {# uuid = rospy.get_param("/run_id") #}
+    uuid = roslaunch.rlutil.get_or_generate_uuid(None, True)
+        {% if cmd.command == 'roslaunch' %}
+    launch = roslaunch.parent.ROSLaunchParent(uuid,
+        ["{{ cmd.args[0] }}"],
+        is_core=False, verbose=False)
+    launch.start(auto_terminate=False)
+    self.launches.append(launch)
+        {% elif cmd.command == 'rosrun' %}
+    launch = roslaunch.parent.ROSLaunchParent(uuid, [],
+        is_core=False, verbose=False)
+            {% if cmd.args|length >= 3 %}
+    node = roslaunch.core.Node("{{ cmd.args[0] }}", "{{ cmd.args[1] }}",
+        name="{{ cmd.args[2] }}")
+            {% else %}
+    node = roslaunch.core.Node("{{ cmd.args[0] }}", "{{ cmd.args[1] }}")
+            {% endif %}
+    launch.start()
+    process, success = launch.runner.launch_node(node)
+    if not success:
+        raise RuntimeException("failed to launch {{ cmd.args[0] }}/{# -#}
+            {{ cmd.args[1] }}")
+    self.launches.append(launch)
+        {% endif %}
+    {% endfor %}
+    self._wait_for_nodes()
+    self._wait_for_interfaces()
+    self.launch_time = get_time()
+    self.deadline = self.launch_time + {# defaults to 15 seconds -#}
+        {{ settings['deadline']|d(15, true) }}
+    for monitor in self.monitors:
+        monitor.on_launch(self.launch_time)
+{% endmacro %}
+
+
+{##############################################################################
+ # Public Macros
+ ##############################################################################}
+
+{# Builds a default message strategy for a given message type token.
+    Default strategies draw all values at random, without constraints. #}
+{% macro default_msg(ros_type) %}
+@strategies.composite
+def {{ _strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
+    msg = msg or {{ ros_type.package }}.{{ ros_type.message }}()
+    {% for field, type_token in ros_type.fields.items() %}
+    {% if type_token.is_array -%}
+        {% if type_token.length is none -%}
+    msg.{{ field }} = draw(strategies.lists({# -#}
+        {{ _type_to_strategy(type_token.type_name) }}()))
+        {%- else -%}
+    for i in range(len(msg.{{ field }})):
+        {{ _init_simple_field(field ~ '[i]', type_token.type_token) }}
+        {%- endif %}
+    {%- else %}
+    {{ _init_simple_field(field, type_token) }}
+    {%- endif %}
+    {% endfor %}
+    return msg
+{% endmacro %}
+
+
+{# Builds a custom message strategy for a given package and message,
+    from a given list of statements. The statements determine which values
+    to assign to each field, as well as any additional constraints that
+    must be satisfied. #}
+{% macro custom_msg(name, pkg, msg, statements) %}
+@strategies.composite
+def {{ name }}(draw):
+    msg = {{ pkg }}.{{ msg }}()
+{% for statement in statements %}
+{{ _statement(statement)|indent(width=4, first=True) }}
+{% endfor %}
+    return msg
+{% endmacro %}
+
+
+{# Builds a strategy to generate test traces, given a trigger event sequence
+    (that can be None) and all available publishers for the test node.
+    A trace is, essentially, a list of message chunks, where each chunk
+    contains a delay, and a list of message-publisher pairs (of randomly
+    generated messages, using an appropriate strategy). #}
+{% macro trace_strategy(activator, trigger, pubs) %}
+@strategies.composite
+def traces(draw):
+    all_msgs = []
+    {% for pub in pubs %}
+        {% if pub.strategies %}
+    elems = {{ pub.strategies[-1] }}()
+        {% else %}
+    elems = {{ _type_to_strategy(pub.type_name) }}()
+        {% endif %}
+    msgs = draw(strategies.lists(elems, min_size=0, max_size=3))
+    for msg in msgs:
+        all_msgs.append((msg, "{{ pub.topic }}"))
+    {% endfor %}
+    r = draw(strategies.randoms())
+    r.shuffle(all_msgs)
+    {% if trigger is none %}
+{{ _chunks_no_trigger()|indent(width=4, first=true) }}
+    {% else %}
+{{ _chunks_with_trigger(trigger)|indent(width=4, first=true) }}
+    {% endif %}
+    {% if activator %}
+{{ _chunks_for_activator(activator)|indent(width=4, first=true) }}
+    {% endif %}
+    return Trace(chunks)
+{% endmacro %}
+
+
+{# Builds the main test case class, which contains the main logic of the test.
+    It is responsible for setting up and tearing down the SUT, building
+    the various property monitors and replaying a random trace given by
+    hypothesis. #}
+{% macro test_trace(main_monitor, monitors, pubs, subs, commands, nodes, settings) %}
+class TestTracer(unittest.TestCase):
+    __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
+                 "launches", "trace_done", "trace_start_time", "msg_log")
+
+    NODES = {{ nodes }}
+
+    def setUp(self):
+        unittest.TestCase.setUp(self)
+        self.trace_start_time = 0
+        uuid = rospy.get_param("/run_id")
+        {# uuid = roslaunch.rlutil.get_or_generate_uuid(None, True) #}
+        roslaunch.configure_logging(uuid)
+        self.launches = []
+        self.monitors = []
+        self.msg_log = []
+        self.subs = {}
+        {% for sub in subs %}
+            {% if sub.fake %}
+        self.subs["{{ sub.topic }}"] = FakeTestSubscriber({# -#}
+            "{{ sub.topic }}", self)
+            {% else %}
+        self.subs["{{ sub.topic }}"] = TestSubscriber("{{ sub.topic }}", {# -#}
+            {{ sub.type_token.type_name.replace("/", ".") }}, self)
+            {% endif %}
+        {% endfor %}
+        self.pubs = {}
+        {% for pub in pubs %}
+        self.pubs["{{ pub.topic }}"] = TestPublisher("{{ pub.topic }}", {# -#}
+            {{ pub.rospy_type }}, self.subs["{{ pub.topic }}"])
+        {% endfor %}
+
+    def tearDown(self):
+        unittest.TestCase.tearDown(self)
+        for sub in self.subs.values():
+            sub.unregister()
+        self.subs = {}
+        for pub in self.pubs.values():
+            pub.unregister()
+        self.pubs = {}
+
+    def test_properties(self):
+        # test once that the SUT is OK, before Hypothesis begins its loop
+        try:
+            self._setup_sut()
+        finally:
+            self._teardown_sut()
+        self._test_hypothesis_properties()
+
+    @settings(max_examples={{ settings['max_examples']|d(1000, true) }}, {# -#}
+                deadline=None)
+    @given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
+    def _test_hypothesis_properties(self, trace, hz):
+        self._setup_test()
+        self._setup_sut()
+        self.trace_done = False
+        rate = rospy.Rate(hz)
+        if rospy.is_shutdown():
+            return
+        try:
+            self.trace_start_time = get_time()
+            for chunk in trace:
+                if chunk.delay:
+                    rospy.sleep(chunk.delay)
+                else:
+                    rate.sleep()
+                self._update()
+                {% if main_monitor.is_liveness %}
+                if self.main_monitor.at_least_once:
+                    return
+                {% endif %}
+                for msg, topic in chunk.messages:
+                    self.pubs[topic].publish(msg)
+            self.trace_done = True
+            self._check_status()
+            rate = rospy.Rate(10)
+            while self.main_monitor.active:
+                rate.sleep()
+                self._update()
+            for monitor in self.monitors:
+                assert not monitor.has_failed
+            {% if main_monitor.is_liveness %}
+                {% if main_monitor.trigger %}
+            assert self.main_monitor.triggered, "invalid test"
+                {% endif %}
+            assert self.main_monitor.at_least_once
+            {% endif %}
+        #except AssertionError as e:
+        #    self._report_trace(trace, hz)
+        #    raise e
+        finally:
+            self._report_msg_log()
+            self._teardown_sut()
+
+    def _setup_test(self):
+        self.msg_log = []
+        self.launch_time = 0
+        self.deadline = 0
+        self.monitors = []
+        {% for monitor in monitors|sort(attribute='index') %}
+        self.monitors.append({{ monitor.class_name }}(self.subs))
+        {% endfor %}
+        self.main_monitor = self.monitors[{{ main_monitor.index }}]
+        self.launches = []
+        self.trace_done = False
+
+{{ _setup_sut(commands, nodes, settings)|indent(width=4, first=true) }}
+
+    def _teardown_sut(self):
+        for launch in self.launches:
+            launch.shutdown()
+        for sub in self.subs.values():
+            sub.reset()
+        self._wait_for_nodes(online=False)
+        rospy.sleep(1.0)
+
+    def _update(self):
+        if rospy.is_shutdown():
+            raise RuntimeError("rospy is shut down")
+        for launch in self.launches:
+            launch.spin_once()
+        now = get_time()
+        for monitor in self.monitors:
+            monitor.update(now)
+            assert not monitor.has_failed, monitor.HPL_PROPERTY
+        assert self.main_monitor.active or self.trace_done, "invalid test"
+        {% if not main_monitor.has_scope_timeout %}
+        if now > self.deadline:
+            {# assert self.main_monitor.active #}
+            assert self.trace_done, "invalid test"
+            {% if main_monitor.is_liveness %}
+            if not self.main_monitor.at_least_once:
+                raise TestTimeoutError("timed out before a result")
+            {% endif %}
+            {# assert main_monitor.terminator.is_all_receive #}
+            self.main_monitor._deactivate(now)
+        {% endif %}
+
+    def _wait_for_nodes(self, timeout=60.0, online=True):
+        if online:
+            rospy.logdebug("Waiting for the SUT to start")
+        else:
+            rospy.logdebug("Waiting for the SUT to shut down")
+        now = get_time()
+        end = now + timeout
+        rate = rospy.Rate(5)
+        while now == 0.0 and not rospy.is_shutdown():
+            rate.sleep()
+            now = get_time()
+        pending = list(self.NODES)
+        while now < end and pending and not rospy.is_shutdown():
+            node_name = pending.pop()
+            if not rosnode_ping(node_name, max_count=1) is online:
+                pending.append(node_name)
+                rate.sleep()
+            now = get_time()
+        if pending and not rospy.is_shutdown():
+            if online:
+                raise LookupError("Failed to find nodes " + str(pending))
+            else:
+                raise LookupError("Failed to kill nodes " + str(pending))
+
+    def _wait_for_interfaces(self, timeout=10.0):
+        rospy.logdebug("Waiting for publishers and subscribers")
+        now = get_time()
+        rate = rospy.Rate(5)
+        end = now + timeout
+        for pub in self.pubs.values():
+            if rospy.is_shutdown():
+                break
+            while now < end and not pub.ready and not rospy.is_shutdown():
+                rate.sleep()
+                now = get_time()
+            if now >= end and not rospy.is_shutdown():
+                raise LookupError(
+                    "Failed to connect to topic: " + str(pub.resolved_name))
+        for sub in self.subs.values():
+            if rospy.is_shutdown():
+                break
+            while now < end and not sub.ready and not rospy.is_shutdown():
+                rate.sleep()
+                now = get_time()
+            if now >= end and not rospy.is_shutdown():
+                raise LookupError(
+                    "Failed to connect to topic: " + str(sub.resolved_name))
+
+    def _check_status(self):
+        if not rospy.is_shutdown():
+            for node_name in self.NODES:
+                assert rosnode_ping(node_name, max_count=1), (
+                    "Failed to find " + node_name)
+            for pub in self.pubs.values():
+                assert pub.ready, "Failed to find " + pub.resolved_name
+            for sub in self.subs.values():
+                assert sub.ready, "Failed to find " + sub.resolved_name
+
+    def _report_trace(self, trace, hz):
+        if not trace.chunks:
+            print "Property failed; no messages were sent to the system."
+        else:
+            print "Property failed at {} hz for".format(hz)
+            for chunk in trace.chunks:
+                if chunk.delay > 0.0:
+                    print ">> Wait {} seconds".format(chunk.delay)
+                for msg, i in chunk.messages:
+                    print ">> Publish on {}".format(repr(
+                        self.pubs[i][0].resolved_name))
+                    print str(msg)
+
+    def log_msg(self, topic, msg, time, sent=False):
+        self.msg_log.append((topic, msg, time, sent))
+
+    def _report_msg_log(self):
+        if not self.msg_log:
+            note("No messages were sent or received.")
+        else:
+            p_topic = p_msg = None
+            for topic, msg, time, sent in self.msg_log:
+                age = time - self.trace_start_time
+                if age == 0:
+                    age = "@ 0s"
+                elif age > 0:
+                    if age < 1:
+                        age = "@ +{}ms".format(int(age * 1000))
+                    else:
+                        age = "@ +{}s".format(age)
+                else:
+                    if age > -1:
+                        age = "@ {}ms".format(int(age * 1000))
+                    else:
+                        age = "@ {}s".format(age)
+                if sent:
+                    note(">> {} sent on {}".format(age, topic))
+                else:
+                    note("<< {} received on {}".format(age, topic))
+                if topic != p_topic or msg != p_msg:
+                    note(str(msg))
+                p_topic = topic
+                p_msg = msg
+{% endmacro %}

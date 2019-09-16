@@ -1,0 +1,617 @@
+{###############################################################################
+    Utility Macros
+###############################################################################}
+
+{% macro _slots(names) %}
+{% if names|length > 1 -%}
+("{{ names|join('", "') }}")
+{%- elif names|length == 1 -%}
+("{{ names[0] }}",)
+{%- else -%}
+()
+{%- endif %}
+{% endmacro %}
+
+
+{###############################################################################
+    EventListener Macros
+###############################################################################}
+
+{% macro _rhs_value(value) %}
+{% if value.is_literal -%}
+    {% if value.value is string -%}
+        "{{ value.value }}"
+    {%- else -%}
+        {{ value.value }}
+    {%- endif %}
+{%- elif value.is_reference -%}
+msg.{{ value }}
+{%- elif value.is_variable -%}
+    {% if value.external -%}
+entry.state[{{ value }}]
+    {%- else -%}
+e.state[{{ value }}]
+    {%- endif %}
+{%- endif %}
+{% endmacro %}
+
+{% macro _field_clause(ref, op, value) %}
+{% if op == '=' -%}
+{{ ref }} == {{ _rhs_value(value) }}
+{%- elif op == 'in' -%}
+    {% if value.is_range -%}
+        {% if value.exclude_lower -%}
+            {{ ref }} > {{ _rhs_value(value.lower_bound) }}
+        {%- else -%}
+            {{ ref }} >= {{ _rhs_value(value.lower_bound) }}
+        {%- endif %} {# -#}
+        and {# -#}
+        {% if value.exclude_upper -%}
+            {{ ref }} < {{ _rhs_value(value.upper_bound) }}
+        {%- else -%}
+            {{ ref }} <= {{ _rhs_value(value.upper_bound) }}
+        {%- endif %}
+    {%- else -%}
+        {% set disjoin = joiner(' or ') %}
+        {% for item in value.values %}{# -#}
+            {{ disjoin() }}{{ ref }} == {{ _rhs_value(item) }}{# -#}
+        {% endfor %}
+    {%- endif %}
+{%- elif op == 'not in' -%}
+    {% if value.is_range -%}
+        {% if value.exclude_lower -%}
+            {{ ref }} <= {{ _rhs_value(value.lower_bound) }}
+        {%- else -%}
+            {{ ref }} < {{ _rhs_value(value.lower_bound) }}
+        {%- endif %} {# -#}
+        or {# -#}
+        {% if value.exclude_upper -%}
+            {{ ref }} >= {{ _rhs_value(value.upper_bound) }}
+        {%- else -%}
+            {{ ref }} > {{ _rhs_value(value.upper_bound) }}
+        {%- endif %}
+    {%- else -%}
+        {% set disjoin = joiner(' and ') %}
+        {% for item in value.values %}{# -#}
+            {{ disjoin() }}{{ ref }} != {{ _rhs_value(item) }}{# -#}
+        {% endfor %}
+    {%- endif %}
+{%- else -%}
+{{ ref }} {{ op }} {{ _rhs_value(value) }}
+{%- endif %}
+{% endmacro %}
+
+{% macro _field_parts_to_str(root, accessors) -%}
+{{ root }}{% for accessor in accessors -%}
+    {% if accessor.is_indexed -%}
+        [{{ accessor.key }}]
+    {%- else -%}
+        .{{ accessor.key }}
+    {%- endif %}
+{%- endfor %}
+{%- endmacro %}
+
+{% macro _field_condition(condition) -%}
+{% if condition.field.is_multi_field -%}
+    {% set ns = namespace(py = [], root = 'msg') %}
+    {% set _f_loops, _rem_expr = condition.field.loops() %}
+    {% for accessors, it in _f_loops -%}
+        {% set _array = _field_parts_to_str(ns.root, accessors) %}
+        {% set ns.root = 'x' ~ loop.index %}
+        {{ ns.py.append('for x' ~ loop.index ~ ' in ' ~ _array)|d("", true) }}
+    {%- endfor %}
+    {% set ref = _field_parts_to_str(ns.root, _rem_expr) %}
+all({{ _field_clause(ref, condition.operator, condition.value) }} {# -#}
+    {{ ns.py|join(' ') }})
+{%- else -%}
+    {% set ref = 'msg.' ~ condition.field -%}
+    {{ _field_clause(ref, condition.operator, condition.value) }}
+{%- endif %}
+{%- endmacro %}
+
+
+{% macro _check_dep_log(event) %}
+{% if event.is_root %}
+seq_start = time
+{% else %}
+seq_start = e.seq_start
+{% endif %}
+requirement = False
+{% for dep in event.dependencies %}
+{# Dependencies are trigger leaves.
+    Thus, each dependency is a disjunction branch. #}
+    {% if dep.log_level >= 2 %}
+for entry in self.{{ dep.var_name }}.log:
+    age = seq_start - entry.time
+    if age >= {{ dep.log_gap }} and age <= {{ dep.log_age }}{# -#}
+            {% for ec in event.get_dep_conditions(dep.key()) %} and {# -#}
+                {{ _field_condition(ec) }}{% endfor %}:
+        requirement = True
+        break
+    {% elif dep.log_level == 1 %}
+for entry in self.{{ dep.var_name }}.log:
+    age = seq_start - entry
+    if age >= {{ dep.log_gap }} and age <= {{ dep.log_age }}:
+        requirement = True
+        break
+    {% endif %}
+if requirement:
+    i -= 1
+    continue
+{% endfor %}
+{% endmacro %}
+
+{% macro _write_to_log(event) %}
+{% if event.log_level >= 2 %}
+    {% if event.saved_vars %}
+state = list(e.state)
+        {% for key, msg_field in event.saved_vars.iteritems() %}
+state[{{ key }}] = msg.{{ msg_field }}
+        {% endfor %}
+self.log.append(self.LogEntry(time, state))
+    {% else %}
+self.log.append(self.LogEntry(time, e.state))
+    {% endif %}
+{% elif event.log_level == 1 %}
+self.log.append(time)
+{% endif %}
+{% endmacro %}
+
+
+{% macro Listener(event) %}
+class {{ event.class_name }}(EventListener):
+    __slots__ = EventListener.__slots__ + {{ _slots(event.get_slots()) }}
+
+    DELAY = {{ event.delay }}
+    DURATION = {{ event.duration }}
+    {% if event.seq_timer %}
+    # sequence timer initiated by this event
+    SEQ_TIMER = {{ event.seq_timer }}
+    {% endif %}
+
+    {% if event.log_level >= 2 %}
+    LogEntry = namedtuple("LogEntry", ("time", "state"))
+
+    {% endif %}
+    def __init__(self):
+        EventListener.__init__(self)
+        {% for e in event.forks %}
+        self.{{ e.var_name }} = None
+        {% endfor %}
+        {% for e in event.dependencies %}
+        self.{{ e.var_name }} = None
+        {% endfor %}
+        {% for e in event.subsumes %}
+        self.{{ e.var_name }} = None
+        {% endfor %}
+        {% if event.log_level >= 1 %}
+        self.log = []
+        {% endif %}
+
+{% if event.log_level >= 1 %}
+    def update(self, time):
+        i = len(self.log) - 1
+        while i >= 0:
+    {% if event.log_level >= 2 %}
+            age = time - self.log[i].time
+    {% elif event.log_level == 1 %}
+            age = time - self.log[i]
+    {% endif %}
+            if age > {{ event.log_age }}:
+                del self.log[i]
+            i -= 1
+        return EventListener.update(self, time)
+
+{% endif %}
+    def process(self, msg, time):
+        forks = 0
+        timed_out = 0
+        {% if not event.reads_state %}
+        condition = True{% for ec in event.conditions %} and {# -#}
+                {{ _field_condition(ec) }}{% endfor %}
+        {% endif %}
+        i = len(self.active) - 1
+        while i >= 0:
+            e = self.active[i]
+            if time >= e.max_time or time >= e.other_max_time:
+                del self.active[i]
+                timed_out += ((not e.subsumed and not e.matches) and 1) or 0
+            {% if event.reads_state %}
+            elif time >= e.min_time{% for ec in event.conditions %} and {# -#}
+                {{ _field_condition(ec) }}{% endfor %}:
+                {% if event.dependencies %}
+{{ _check_dep_log(event)|indent(width=16, first=true) }}
+                {% endif %}
+            {% else %}
+            elif time >= e.min_time and condition:
+            {% endif %}
+                forks += 1
+                e.matches += 1
+                {% if not event.is_leaf %}
+                    {% if event.is_root %}
+                seq_start = time
+                    {% else %}
+                seq_start = e.seq_start
+                    {% endif %}
+                {% endif %}
+                {% if not event.external_timer is none %}
+                other_max_time = time + {{ event.external_timer }}
+                {% elif event.forks %}
+                other_max_time = e.other_max_time
+                {% endif %}
+                {% if event.saved_vars %}
+                    {% for next in event.forks %}
+                state = list(e.state)
+                        {% for key, msg_field in event.saved_vars.iteritems() %}
+                state[{{ key }}] = msg.{{ msg_field }}
+                        {% endfor %}
+                        {% if next.is_root %}
+                self.{{ next.var_name }}.add(time, state, -1, other_max_time)
+                        {% else %}
+                self.{{ next.var_name }}.add(time, state, {# -#}
+                        seq_start, other_max_time)
+                        {% endif %}
+                    {% endfor %}
+                {% else %}
+                    {% for next in event.forks %}
+                        {% if next.is_root %}
+                self.{{ next.var_name }}.add(time, e.state, -1, other_max_time)
+                        {% else %}
+                self.{{ next.var_name }}.add(time, e.state, {# -#}
+                        seq_start, other_max_time)
+                        {% endif %}
+                    {% endfor %}
+                {% endif %}
+                {% for subsumed in event.subsumes %}
+                self.{{ subsumed.var_name }}.subsume()
+                {% endfor %}
+                {% if event.log_level > 0 %}
+{{ _write_to_log(event)|indent(width=16, first=true) }}
+                {% endif %}
+            i -= 1
+        return (forks, timed_out)
+{% endmacro %}
+
+
+{###############################################################################
+    PropertyMonitor Macros
+###############################################################################}
+
+{% macro _monitor_slots(monitor) %}
+{% set sep = joiner(",") %}
+__slots__ = PropertyMonitor.__slots__ + ({# -#}
+{% for sub in monitor.subs -%}
+    {{ sep() }} "_sub{{ loop.index }}"
+{%- endfor %}{# -#}
+{% for event in monitor.events -%}
+{{ sep() }} "{{ event.var_name }}"
+{%- endfor %}{# -#}
+,)
+{% endmacro %}
+
+{% macro _safety_monitor_update(events, has_timeout) %}
+def update(self, time):
+    with self.lock:
+    {% if has_timeout %}
+        if time > self.scope_max_time:
+            return self._deactivate(self.scope_max_time)
+    {% endif %}
+    {% for event in events %}
+        {% if event.is_behaviour %}
+        timed_out = self.{{ event.var_name }}.update(time)
+        if timed_out:
+            self.success += timed_out
+            self.on_success(time=time)
+        {% else %}
+        self.{{ event.var_name }}.update(time)
+        {% endif %}
+    {% else %}
+        pass
+    {% endfor %}
+{% endmacro %}
+
+{% macro _liveness_monitor_update(events, has_timeout, slack) %}
+def update(self, time):
+    with self.lock:
+    {% if has_timeout %}
+        if time > self.scope_max_time:
+        {% if slack == 0.0 %}
+            return self._deactivate(self.scope_max_time)
+        {% else %}
+            self._end_scope(self.scope_max_time, time)
+        {% endif %}
+    {% endif %}
+    {% if slack > 0.0 %}
+        if time > self.slack_max_time:
+            return self._deactivate(time)
+    {% endif %}
+    {% for event in events %}
+        {% if event.is_behaviour %}
+        timed_out = self.{{ event.var_name }}.update(time)
+        if timed_out:
+            self.failure += timed_out
+            self.on_failure(time=time)
+        {% else %}
+        self.{{ event.var_name }}.update(time)
+        {% endif %}
+    {% else %}
+        pass
+    {% endfor %}
+{% endmacro %}
+
+
+{# We create one Subscriber per topic, per monitor, and not one Subscriber
+ # per EventListener so that we only acquire a single Lock. This helps
+ # ensure some serialization of the message processing, and also ensures
+ # that all listeners of a monitor have their clock updated simultaneously.
+ # Additionally, all listeners process messages with the same timestamp. #}
+{% macro _safety_topic_callback(i, events, topic, has_timeout) %}
+def _on_cb{{ i }}(self, msg, time=None):
+    # topic: {{ topic }}
+    time = get_time() if time is None else time
+    with self.lock:
+    {% if has_timeout %}
+        if time > self.scope_max_time:
+            self._deactivate(self.scope_max_time)
+    {% endif %}
+    {% for event in events %}
+        forks, timed_out = self.{{ event.var_name }}.process(msg, time)
+        {% if event.is_behaviour %}
+            {% if event.is_leaf %}
+        if forks and time > self.slack_max_time:
+            self.failure += forks
+            self.on_failure(time=time, msg=msg)
+            {% endif %}
+        if timed_out:
+            self.success += timed_out
+            self.on_success(time=time)
+        {% elif event.is_trigger and event.is_leaf %}
+        self.trigger_count += forks
+        {% elif event.is_activator and event.is_leaf %}
+        if forks:
+            self._activate(time)
+        {% elif event.is_terminator and event.is_leaf %}
+        if forks:
+            self._deactivate(time)
+        {% endif %}
+    {% else %}
+        pass
+    {% endfor %}
+{% endmacro %}
+
+{% macro _liveness_topic_callback(i, events, topic, has_timeout, slack) %}
+def _on_cb{{ i }}(self, msg, time=None):
+    # topic: {{ topic }}
+    time = get_time() if time is None else time
+    with self.lock:
+    {% if has_timeout %}
+        if time > self.scope_max_time:
+        {% if slack == 0.0 %}
+            self._deactivate(self.scope_max_time)
+        {% else %}
+            self._end_scope(self.scope_max_time, time)
+        {% endif %}
+    {% endif %}
+    {% if slack > 0.0 %}
+        if time > self.slack_max_time:
+            self._deactivate(time)
+    {% endif %}
+    {% for event in events %}
+        forks, timed_out = self.{{ event.var_name }}.process(msg, time)
+        {% if event.is_behaviour %}
+            {% if event.is_leaf %}
+        if forks:
+            self.success += forks
+            self.on_success(time=time, msg=msg)
+            {% endif %}
+        if timed_out:
+            self.failure += timed_out
+            self.on_failure(time=time)
+        {% elif event.is_trigger and event.is_leaf %}
+        self.trigger_count += forks
+        {% elif event.is_activator and event.is_leaf %}
+        if forks:
+            self._activate(time)
+        {% elif event.is_terminator and event.is_leaf %}
+        if forks:
+            {% if slack == 0.0 %}
+            self._deactivate(time)
+            {% else %}
+            self._end_scope(time, time)
+            if time > self.slack_max_time:
+                self._deactivate(time)
+            {% endif %}
+        {% endif %}
+    {% else %}
+        pass
+    {% endfor %}
+{% endmacro %}
+
+{% macro _safety_launch(monitor, slack) %}
+    {% set vc = monitor.saved_vars %}
+def on_launch(self, time):
+    {% if monitor.activator is none %}
+    self.active = True
+    self.scope_max_time = time + {{ monitor.scope_timeout }}
+    self.slack_max_time = time + {{ slack }}
+        {% if monitor.terminator %}
+            {% for event in monitor.terminator.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+            {% endfor %}
+        {% endif %}
+        {% if monitor.trigger %}
+            {% for event in monitor.trigger.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+            {% endfor %}
+        {% endif %}
+        {% for event in monitor.behaviour.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+        {% endfor %}
+    {% else %}
+        {% for event in monitor.activator.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+        {% endfor %}
+    {% endif %}
+{% endmacro %}
+
+{% macro _liveness_launch(monitor) %}
+    {% set vc = monitor.saved_vars %}
+def on_launch(self, time):
+    {% if monitor.activator is none %}
+    self.active = True
+    self.scope_max_time = time + {{ monitor.scope_timeout }}
+        {% if monitor.terminator %}
+            {% for event in monitor.terminator.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+            {% endfor %}
+        {% endif %}
+        {% if monitor.trigger is none %}
+            {% for event in monitor.behaviour.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+            {% endfor %}
+        {% else %}
+            {% for event in monitor.trigger.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+            {% endfor %}
+        {% endif %}
+    {% else %}
+        {% for event in monitor.activator.roots %}
+    self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
+        {% endfor %}
+    {% endif %}
+{% endmacro %}
+
+{# Used only for liveness monitors. Marks the end of the scope and the
+    beginning of the slack period. #}
+{% macro _monitor_scope_end(monitor, slack) %}
+def _end_scope(self, scope_max_time, time):
+    self.scope_max_time = inf
+    self.slack_max_time = scope_max_time + {{ slack }}
+    if time <= self.slack_max_time:
+    {% if monitor.trigger %}
+        {% for event in monitor.trigger.events %}
+        self.{{ event.var_name }}.reset()
+        {% else %}
+        pass
+        {% endfor %}
+    {% else %}
+        pass
+    {% endif %}
+    {% if monitor.terminator %}
+        {% for event in monitor.terminator.events %}
+        self.{{ event.var_name }}.reset()
+        {% else %}
+        pass
+        {% endfor %}
+    {% else %}
+        pass
+    {% endif %}
+{% endmacro %}
+
+{% macro _monitor_deactivate(monitor) %}
+{% if monitor.is_safety %}
+    {% set timeout_var = "success" %}
+{% else %}
+    {% set timeout_var = "failure" %}
+{% endif %}
+def _deactivate(self, time):
+    self.active = False
+    self.scope_max_time = inf
+    self.slack_max_time = inf
+    {% for event in monitor.events %}
+        {% if not event.is_activator %}
+            {% if event.is_behaviour %}
+    timed_out = self.{{ event.var_name }}.reset()
+    if timed_out:
+        self.{{ timeout_var }} += timed_out
+        self.on_{{ timeout_var }}()
+            {% else %}
+    self.{{ event.var_name }}.reset()
+            {% endif %}
+        {% endif %}
+    {% endfor %}
+    {% if monitor.activator %}
+        {% for event in monitor.activator.roots %}
+    self.{{ event.var_name }}.add(time, [None] {# -#}
+            * {{ monitor.saved_vars }}, -1, inf)
+        {% endfor %}
+    {% endif %}
+{% endmacro %}
+
+
+{% macro Monitor(monitor, slack=0.0, debug=false) %}
+class {{ monitor.class_name }}(PropertyMonitor):
+    {{ _monitor_slots(monitor) }}
+
+    HPL_PROPERTY = """{{ monitor.hpl_string }}"""
+
+    def __init__(self, subs, success_action=None, failure_action=None):
+        PropertyMonitor.__init__(self, success_action=success_action,
+                                 failure_action=failure_action)
+        {% if not debug %}
+        {% for sub in monitor.subs %}
+        subs["{{ sub.topic }}"].add(self._on_cb{{ loop.index }})
+        {% endfor %}
+        {% endif %}
+        {% for event in monitor.events %}
+        self.{{ event.var_name }} = {{ event.class_name }}()
+        {% endfor %}
+        self._link_events()
+        self.is_liveness = {{ monitor.is_liveness }}
+        self.is_safety = {{ monitor.is_safety }}
+
+{% if monitor.is_safety %}
+{{ _safety_launch(monitor, slack)|indent(width=4, first=true) }}
+
+{{ _safety_monitor_update(monitor.events, monitor.has_scope_timeout)
+        |indent(width=4, first=true) }}
+
+    {% for sub in monitor.subs %}
+{{ _safety_topic_callback(loop.index, sub.events, sub.topic,
+        monitor.has_scope_timeout)|indent(width=4, first=true) }}
+    {% endfor %}
+{% elif monitor.is_liveness %}
+{{ _liveness_launch(monitor)|indent(width=4, first=true) }}
+
+{{ _liveness_monitor_update(monitor.events, monitor.has_scope_timeout, slack)
+        |indent(width=4, first=true) }}
+
+    {% for sub in monitor.subs %}
+{{ _liveness_topic_callback(loop.index, sub.events, sub.topic,
+        monitor.has_scope_timeout, slack)|indent(width=4, first=true) }}
+    {% endfor %}
+{% endif %}
+
+{{ _monitor_deactivate(monitor)|indent(width=4, first=true) }}
+
+{{ _monitor_scope_end(monitor, slack)|indent(width=4, first=true) }}
+
+    def _activate(self, time):
+        self.active = True
+        self.scope_max_time = time + {{ monitor.scope_timeout }}
+        {% if monitor.is_safety %}
+        self.slack_max_time = time + {{ slack }}
+        {% endif %}
+        self.success = 0
+        self.failure = 0
+        self.trigger_count = 0
+        {% for event in monitor.events %}
+            {% if event.is_activator %}
+        self.{{ event.var_name }}.reset()
+            {% endif %}
+        {% endfor %}
+
+    def _link_events(self):
+        {% for event in monitor.events %}
+            {% for next in event.forks %}
+        self.{{ event.var_name }}.{{ next.var_name }} = self.{{ next.var_name }}
+            {% endfor %}
+            {% for dep in event.dependencies %}
+        self.{{ event.var_name }}.{{ dep.var_name }} = self.{{ dep.var_name }}
+            {% endfor %}
+            {% for esub in event.subsumes %}
+        self.{{ event.var_name }}.{{ esub.var_name }} = self.{{ esub.var_name }}
+            {% endfor %}
+        {% endfor %}
+        pass
+{% endmacro %}

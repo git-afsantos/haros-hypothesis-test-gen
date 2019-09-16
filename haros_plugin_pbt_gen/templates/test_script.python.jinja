@@ -1,0 +1,491 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+#Copyright (c) 2019 André Santos
+#
+#Permission is hereby granted, free of charge, to any person obtaining a copy
+#of this software and associated documentation files (the "Software"), to deal
+#in the Software without restriction, including without limitation the rights
+#to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#copies of the Software, and to permit persons to whom the Software is
+#furnished to do so, subject to the following conditions:
+
+#The above copyright notice and this permission notice shall be included in
+#all copies or substantial portions of the Software.
+
+#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+#AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+#THE SOFTWARE.
+
+################################################################################
+# Notes
+################################################################################
+
+# ---- TEST CASE STRUCTURE (PROPERTY MONITOR) ----
+
+#         trigger          terminus
+#            |                 |
+# launch     +-----------------+     timeout
+#   >--------| // behaviour // |--------<
+#   | ////// +-----------------+
+#   | ////// random msg ////// |
+#   +--------------------------+
+
+# Behaviour - Observable actions from the SUT (e.g. publish a message).
+#   - liveness: at least one observable action eventually matches the pattern.
+#   - safety: all observable actions (if any) match the pattern.
+
+# Trigger - Event that marks the start of the monitoring interval.
+#   - launch: event that marks the start of the test case (default).
+#   - receive: when the SUT receives a message matching a pattern.
+#   - publish: when the SUT publishes a message matching a pattern.
+#   - {event} and {event}: when both events happen.
+#   - {event} or {event}: when either event happens.
+#   - {event} then {event}: when both events happen in order.
+
+# Terminus - Event that marks the end of the monitoring interval.
+#   - timeout: event that marks the timeout of the test case (default).
+#   - receive: when the SUT receives a message matching a pattern.
+#              [incompatible with liveness behaviour, must ensure
+#               enough time for the SUT to act]
+#   - publish: when the SUT publishes a message matching a pattern.
+#              [must include a timeout, to ensure tests terminate]
+
+# Trigger events start a timeout timer, even if more random messages
+# are generated afterwards.
+# If the terminus is the timeout itself, no additional action is needed.
+# If the terminus is a receive event (safety properties only), the timeout
+# is either ignored, and the test is controlled entirely by the generated
+# trace, or used to control the generation of the terminus message.
+# If the terminus is a publish event, the timeout is used to differentiate
+# between valid tests (publish happens) and invalid tests (timeout happens).
+
+
+# ---- TIMING ISSUES (FLAKY TESTS) ----
+
+# Due to the distributed and multithreaded nature of ROS, many systems will
+# be prone to non-determinism and behaviour that is dependent on the timing
+# of incoming messages.
+
+# For instance, consider a node that spins on one thread and publishes at a
+# fixed rate on another thread. Incoming messages are processed as soon as
+# possible, and the internal state is updated accordingly. But, since the
+# publishing thread only takes occasional snapshots of the internal state,
+# what ends up being published depends on what messages have been processed
+# before each tick.
+# Consider messages A and B that change the output message.
+# We have the following scenarios:
+
+#       Scenario 1
+# spin:            A    B
+# time:     >-o----o----o----o->
+# rate:    publish        publish
+
+#       Scenario 2
+# spin:       A         B
+# time:     >-o----o----o----o->
+# rate:         publish   publish
+
+# In Scenario 1 the second publish iteration will see all changes of the
+# internal state, and decide on the appropriate output.
+# In Scenario 2 message B is not processed in time, and the first publish
+# iteration will only consider A, while the second will consider both A and B.
+
+# When a test fails, repeating the trace might fall into the opposite scenario,
+# which might not break the property anymore, and thus lead to a flaky test.
+# This kind of bugs could probably be exploited with simulated time,
+# but it might be best to leave that as an optional feature, not the default.
+
+
+################################################################################
+# Imports
+################################################################################
+
+from builtins import range # Python 2 and 3: forward-compatible
+from collections import namedtuple
+from threading import Lock
+from time import time as get_time
+import unittest
+
+from hypothesis import assume, given, note, settings
+import hypothesis.strategies as strategies
+import rospy
+import roslaunch
+from rosnode import rosnode_ping
+from rospy import Publisher, Subscriber, SubscribeListener
+
+{% for pkg_name in pkg_imports %}
+import {{ pkg_name }}.msg as {{ pkg_name }}
+{% endfor %}
+
+
+################################################################################
+# Constants
+################################################################################
+
+inf = float("inf")
+nan = float("nan")
+
+INT8_MIN_VALUE = -(2 ** 7)
+INT8_MAX_VALUE = (2 ** 7) - 1
+
+INT16_MIN_VALUE = -(2 ** 15)
+INT16_MAX_VALUE = (2 ** 15) - 1
+
+INT32_MIN_VALUE = -(2 ** 31)
+INT32_MAX_VALUE = (2 ** 31) - 1
+
+INT64_MIN_VALUE = -(2 ** 63)
+INT64_MAX_VALUE = (2 ** 63) - 1
+
+UINT8_MAX_VALUE = (2 ** 8) - 1
+
+UINT16_MAX_VALUE = (2 ** 16) - 1
+
+UINT32_MAX_VALUE = (2 ** 32) - 1
+
+UINT64_MAX_VALUE = (2 ** 64) - 1
+
+FLOAT32_MIN_VALUE = -3.3999999521443642e+38
+FLOAT32_MAX_VALUE = 3.3999999521443642e+38
+
+FLOAT64_MIN_VALUE = -1.7E+308
+FLOAT64_MAX_VALUE = 1.7E+308
+
+
+################################################################################
+# Utility
+################################################################################
+
+def do_nothing(time=None, msg=None):
+    pass
+
+def range_excluding(start, end, exclude):
+    for i in range(start, end):
+        if i not in exclude:
+            yield i
+
+{% import 'specs.python.jinja' as specs %}
+
+################################################################################
+# Base Strategies
+################################################################################
+
+{% include "base_strategies.py" ignore missing %}
+
+{% import 'strategies.python.jinja' as strats %}
+{% for type_token in default_strategies %}
+
+{{ strats.default_msg(type_token) }}
+{% endfor %}
+
+################################################################################
+# Custom Message Strategies
+################################################################################
+
+{% for entry in custom_strategies %}
+
+{{ strats.custom_msg(entry.name, entry.pkg, entry.msg, entry.statements) }}
+{% endfor %}
+
+################################################################################
+# Trace Strategies
+################################################################################
+
+class Trace(object):
+    __slots__ = ("chunks",)
+
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    def __len__(self):
+        return len(self.chunks)
+
+    def __iter__(self):
+        return iter(self.chunks)
+
+    def __str__(self):
+        return " >> ".join(str(c) for c in self.chunks)
+
+    def __repr__(self):
+        return "Trace({})".format(repr(self.chunks))
+
+
+class Chunk(object):
+    __slots__ = ("messages", "delay")
+
+    def __init__(self, msgs=None, delay=0.0):
+        # msgs :: [(Message, string (topic))]
+        self.messages = msgs if msgs is not None else []
+        self.delay = delay
+
+    def __str__(self):
+        return "({} s) {}".format(self.delay, self.messages)
+
+    def __repr__(self):
+        return "Chunk(msgs={}, delay={})".format(
+            repr(self.messages), self.delay)
+
+{% if main_monitor.is_liveness %}
+{{ strats.trace_strategy(main_monitor.activator, main_monitor.trigger, publishers) }}
+{% elif main_monitor.is_safety %}
+{{ strats.trace_strategy(main_monitor.activator, none, publishers) }}
+{% endif %}
+
+
+################################################################################
+# Event Listeners
+################################################################################
+
+{# Even if a single EventListener class is reused multiple times in a chain,
+ # we are going to create a different instance for each occurrence in the
+ # chain, so it is safe to assume that an instance will be forked always
+ # with the same delay and duration. This means that these values can be
+ # passed to the constructor. #}
+{# We assume that a single instance of an EventListener will only have one
+ # "path" that it can follow (and fork into), even if it forks multiple
+ # listeners at once (e.g. disjunction), so this information can be stored. #}
+{# On further thought, we are going to the point of creating a subclass for
+ # each occurrence of an event, even if it is the same event in theory.
+ # This is because different occurrences of the same event might save
+ # different variables to pass along to the next event. So, either:
+ #  1. we store the next fork and which variables to set dynamically
+ #     (with setattr() in a loop, potentially); or
+ #  2. we hard-code each subclass, potentially increasing code duplication,
+ #     but gaining some efficiency. #}
+class EventListener(object):
+    __slots__ = ("active",)
+
+    class EventListenerInstance(object):
+        __slots__ = ("min_time", "max_time", "seq_start", "other_max_time",
+            "state", "matches", "subsumed")
+
+        def __init__(self, min_time, max_time, seq_start, state,
+                     other_max_time=inf):
+            self.min_time = min_time
+            self.max_time = max_time
+            self.seq_start = seq_start
+            self.other_max_time = other_max_time
+            self.state = state
+            self.matches = 0
+            self.subsumed = False
+
+    DELAY = 0.0
+    DURATION = inf
+
+    def __init__(self):
+        self.active = []
+
+    def add(self, time, state, seq_start, other_max_time):
+        self.active.append(self.EventListenerInstance(time + self.DELAY,
+            time + self.DURATION, seq_start, state, other_max_time))
+
+    def update(self, time):
+        timed_out = 0
+        i = len(self.active) - 1
+        while i >= 0:
+            e = self.active[i]
+            if time >= e.max_time or time >= e.other_max_time:
+                del self.active[i]
+                timed_out += ((not e.subsumed and not e.matches) and 1) or 0
+            i -= 1
+        return timed_out
+
+    def reset(self):
+        timed_out = 0
+        for e in self.active:
+            timed_out += ((not e.subsumed and not e.matches) and 1) or 0
+        self.active = []
+        return timed_out
+
+    def subsume(self):
+        for e in self.active:
+            e.subsumed = True
+
+    def process(self, msg, time):
+        return (0, self.update(time)) # (forks, timed_out)
+
+
+{% for event in events %}
+{{ specs.Listener(event) }}
+
+{% endfor %}
+
+################################################################################
+# Property Monitors
+################################################################################
+
+class PropertyMonitor(object):
+    __slots__ = ("lock", "active", "trigger_count", "success", "failure",
+                 "on_success", "on_failure", "is_liveness", "is_safety",
+                 "scope_max_time", "slack_max_time")
+
+    def __init__(self, success_action=None, failure_action=None):
+        self.lock = Lock()
+        self.active = False
+        self.trigger_count = 0
+        self.success = 0
+        self.failure = 0
+        self.scope_max_time = inf
+        self.slack_max_time = inf
+        self.on_success = success_action or do_nothing
+        self.on_failure = failure_action or do_nothing
+
+    @property
+    def at_least_once(self):
+        return self.success > 0
+
+    @property
+    def has_failed(self):
+        return self.failure > 0
+
+    @property
+    def triggered(self):
+        return self.trigger_count > 0
+
+    def on_launch(self, time):
+        raise NotImplementedError("subclasses must override this method")
+
+    def update(self, time):
+        raise NotImplementedError("subclasses must override this method")
+
+{% for monitor in monitors %}
+
+{{ specs.Monitor(monitor, slack=slack) }}
+
+{% endfor %}
+
+################################################################################
+# Test Tracer
+################################################################################
+
+class TestTimeoutError(Exception):
+    pass
+
+
+class TestPublisher(SubscribeListener):
+    __slots__ = ("pub", "subscriber")
+
+    def __init__(self, topic, msg_type, subscriber):
+        self.pub = Publisher(topic, msg_type, queue_size=10)
+        #                    subscriber_listener=self
+        self.subscriber = subscriber
+
+    @property
+    def ready(self):
+        if self.subscriber.fake:
+            return self.pub.get_num_connections() >= 1
+        return self.pub.get_num_connections() >= 2
+
+    @property
+    def resolved_name(self):
+        return self.pub.resolved_name
+
+    def peer_subscribe(self, topic_name, topic_publish, peer_publish):
+        print ">> SUBSCRIBED ON", topic_name
+
+    def peer_unsubscribe(self, topic_name, num_peers):
+        print ">> UNSUBSCRIBED ON", topic_name
+
+    def unregister(self):
+        self.pub.unregister()
+
+    def publish(self, msg):
+        self.subscriber._cb(msg)
+        self.pub.publish(msg)
+
+
+class FakeTestSubscriber(object):
+    __slots__ = ("topic", "callbacks", "msg_log")
+
+    def __init__(self, topic, msg_log):
+        self.topic = topic
+        self.callbacks = []
+        self.msg_log = msg_log
+
+    @property
+    def ready(self):
+        return True
+
+    @property
+    def fake(self):
+        return True
+
+    @property
+    def resolved_name(self):
+        return self.topic
+
+    def reset(self):
+        self.callbacks = []
+
+    unregister = reset
+
+    def add(self, cb):
+        self.callbacks.append(cb)
+
+    def _cb(self, msg):
+        time = get_time()
+        self.msg_log.log_msg(self.topic, msg, time, sent=True)
+        for cb in self.callbacks:
+            cb(msg, time=time)
+
+
+class TestSubscriber(object):
+    __slots__ = ("sub", "callbacks", "msg_log")
+
+    def __init__(self, topic, msg_type, msg_log):
+        self.sub = Subscriber(topic, msg_type, self._cb, queue_size=10)
+        self.callbacks = []
+        self.msg_log = msg_log
+
+    @property
+    def ready(self):
+        return self.sub.get_num_connections() >= 1
+
+    @property
+    def fake(self):
+        return False
+
+    @property
+    def resolved_name(self):
+        return self.sub.resolved_name
+
+    def reset(self):
+        self.callbacks = []
+
+    def unregister(self):
+        self.reset()
+        self.sub.unregister()
+
+    def add(self, cb):
+        self.callbacks.append(cb)
+
+    def _cb(self, msg):
+        time = get_time()
+        self.msg_log.log_msg(self.sub.resolved_name, msg, time)
+        for cb in self.callbacks:
+            cb(msg, time=time)
+
+{{ strats.test_trace(main_monitor, monitors, publishers, subscribers,
+                     commands, nodes, settings) }}
+
+
+################################################################################
+# Entry Point
+################################################################################
+
+def main():
+    # {{ property_text }}
+    rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
+    # collector = OutputCollector()
+    # reporting.reporter.value = collector.report
+    unittest.main(module=__name__, argv=[__name__], exit=False)
+    # collector.print_output()
+    # HarosPropertyTester.print_times()
+
+if __name__ == "__main__":
+    main()
