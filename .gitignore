@@ -1,0 +1,5 @@
+haros_plugin_pbt_gen/*.pyc
+haros_plugin_pbt_gen/**/*.pyc
+build
+dist
+haros_plugin_pbt_gen.egg-info
