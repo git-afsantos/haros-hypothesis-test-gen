@@ -248,8 +248,10 @@ class MessageStrategyGenerator(object):
                     fields.append(field.by_default)
                     fields.extend(field.fields.values())
                 else:
-                    if field.strategy.is_default:
+                    if field.is_default:
                         field.noop_tree()
+                    elif field.strategy.is_default:
+                        field.cautious_noop_tree()
                     # this is needed so we do not miss assumptions
                     fields.extend(field.fields.values())
         return queue
@@ -425,6 +427,19 @@ class CompositeFieldGenerator(FieldGenerator):
     def is_data_field(self):
         return False
 
+    @property
+    def is_default(self):
+        if not self.strategy.is_default:
+            return False
+        fields = list(self.fields.values())
+        while fields:
+            field = fields.pop(0)
+            if not field.strategy.is_default:
+                return False
+            if not field.is_data_field:
+                fields.extend(field._children())
+        return True
+
     def state(self, build_number):
         if self.strategy.build_number != build_number:
             if not self.parent._initialized(build_number):
@@ -459,6 +474,15 @@ class CompositeFieldGenerator(FieldGenerator):
             field = fields.pop(0)
             assert field.strategy.is_default
             field.strategy = _NoopStrategy(field._ready_ref)
+            if not field.is_data_field:
+                fields.extend(field._children())
+
+    def cautious_noop_tree(self):
+        fields = list(self.fields.values())
+        while fields:
+            field = fields.pop(0)
+            if field.strategy.is_default:
+                field.strategy = _NoopStrategy(field._ready_ref)
             if not field.is_data_field:
                 fields.extend(field._children())
 

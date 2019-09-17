@@ -481,11 +481,7 @@ class TestSubscriber(object):
 def main():
     # {{ property_text }}
     rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
-    # collector = OutputCollector()
-    # reporting.reporter.value = collector.report
     unittest.main(module=__name__, argv=[__name__], exit=False)
-    # collector.print_output()
-    # HarosPropertyTester.print_times()
 
 if __name__ == "__main__":
     main()

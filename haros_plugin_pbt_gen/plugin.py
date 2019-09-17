@@ -53,6 +53,8 @@ INF = float("inf")
 # Plugin Entry Point
 ################################################################################
 
+config_num = 0
+
 def configuration_analysis(iface, config):
     if not config.launch_commands or not config.nodes.enabled:
         return
@@ -63,17 +65,11 @@ def configuration_analysis(iface, config):
     assumptions = [p for p in config.hpl_assumptions
                      if isinstance(p, HplAstObject)]
     settings = config.user_attributes.get(KEY, EMPTY_DICT)
-
-    dirid = "config_" + str(id(config))
-    dirpath = os.path.join(os.getcwd(), dirid)
     try:
-        os.mkdir(dirpath)
-    except IOError as e:
-        return iface.log_error(str(e))
-
-    try:
+        global config_num
+        config_num += 1
         gen = TestGenerator(iface, config, properties, assumptions, settings)
-        gen.make_tests(dirpath)
+        gen.make_tests()
     except SpecError as e:
         iface.log_error(e.message)
 
@@ -120,7 +116,7 @@ class TestGenerator(object):
             self.pkg_imports.add(type_token.package)
         self.default_strategies = self._get_default_strategies()
 
-    def make_tests(self, dirpath):
+    def make_tests(self):
         all_monitors = []
         for i in range(len(self.properties)):
             p = self.properties[i]
@@ -144,10 +140,10 @@ class TestGenerator(object):
                        "following property: ")
                 msg += mon.hpl_string
                 self.iface.log_warning(msg)
-        for testable in tests:
-            script_path = os.path.join(dirpath,
-                testable.monitor.class_name + ".py")
-            self._write_test_files(testable, all_monitors, script_path)
+        for i in range(len(tests)):
+            testable = tests[i]
+            filename = "c{:03d}_test_{}.py".format(config_num, i+1)
+            self._write_test_files(tests[i], all_monitors, filename)
         if not tests:
             msg = "None of the given properties for {} is directly testable."
             msg = msg.format(self.config.name)
@@ -275,8 +271,7 @@ class TestGenerator(object):
             if event.external_timer is not None:
                 event.external_timer += slack
 
-    def _write_test_files(self, test_case, all_monitors,
-                          script_path, debug=False):
+    def _write_test_files(self, test_case, all_monitors, filename, debug=False):
         # test_case: includes monitor for which traces will be generated
         # all_monitors: used for secondary monitors
         env = Environment(
@@ -307,11 +302,12 @@ class TestGenerator(object):
             "nodes": self.nodes,
             "commands": self.commands
         }
-        with open(script_path, "w") as f:
+        with open(filename, "w") as f:
             f.write(template.render(**data).encode("utf-8"))
-        mode = os.stat(script_path).st_mode
+        mode = os.stat(filename).st_mode
         mode |= (mode & 0o444) >> 2
-        os.chmod(script_path, mode)
+        os.chmod(filename, mode)
+        self.iface.export_file(filename)
 
 
 ################################################################################
@@ -338,7 +334,10 @@ class CustomStrategyBuilder(object):
                     event.topic, publishers)
                 pub = publishers[event.topic]
                 self.pkg_imports.add(pub.type_token.package)
-                self.strategies.append(self._event(event, pub))
+                if event.conditions:
+                    self.strategies.append(self._event(event, pub))
+                elif pub.strategies:
+                    event.strategy = pub.strategies[-1]
         trigger = monitor.trigger
         if trigger is not None:
             if (monitor.is_safety
@@ -364,7 +363,10 @@ class CustomStrategyBuilder(object):
                         event.topic, publishers)
                     pub = publishers[event.topic]
                     self.pkg_imports.add(pub.type_token.package)
-                    self.strategies.append(self._event(event, pub))
+                    if event.conditions:
+                        self.strategies.append(self._event(event, pub))
+                    elif pub.strategies:
+                        event.strategy = pub.strategies[-1]
         return self.strategies
 
     def _publisher(self, publisher, msg_filter):

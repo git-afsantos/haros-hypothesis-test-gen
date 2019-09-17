@@ -17,9 +17,9 @@ ros_{{ pkg }}_{{ msg }}
     since building a ROS message already initialises all field trees below. #}
 {% macro _init_simple_field(name, type_token) %}
 {% if type_token.is_primitive %}
-msg.{{ name }} = draw({{ _type_to_strategy(type_token.type_name) }}())
-{% else %} {# modify in-place, ignore return value #}
-draw({{ _type_to_strategy(type_token.type_name) }}(msg=msg.{{ name }}))
+msg.{{ name }} = draw({{ _type_to_strategy(type_token.type_name) }}()){# -#}
+{% else %}{# modify in-place, ignore return value #}
+draw({{ _type_to_strategy(type_token.type_name) }}(msg=msg.{{ name }})){# -#}
 {% endif %}
 {% endmacro %}
 
@@ -49,7 +49,11 @@ for {{ statement.variable }} in {{ statement.expression }}:
 {# Transforms a sequence of events into a sequence of message chunks,
     with one message per chunk. #}
 {% macro _chunks_for_sequence(event) -%}
+{% if event.strategy %}
 msg = (draw({{ event.strategy }}()), "{{ event.topic }}")
+{% else %}
+msg = (draw({{ _type_to_strategy(event.msg_type) }}()), "{{ event.topic }}")
+{% endif %}
 chunks.append(Chunk(msgs=[msg], delay={{ event.delay }}))
     {% if event.forks and not event.is_leaf %}
     {# NOTE in a normal sequence, an event should only have one fork #}
@@ -169,17 +173,17 @@ def _setup_sut(self):
 def {{ _strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
     msg = msg or {{ ros_type.package }}.{{ ros_type.message }}()
     {% for field, type_token in ros_type.fields.items() %}
-    {% if type_token.is_array -%}
-        {% if type_token.length is none -%}
+    {% if type_token.is_array %}
+        {% if type_token.length is none %}
     msg.{{ field }} = draw(strategies.lists({# -#}
         {{ _type_to_strategy(type_token.type_name) }}()))
-        {%- else -%}
+        {% else %}
     for i in range(len(msg.{{ field }})):
         {{ _init_simple_field(field ~ '[i]', type_token.type_token) }}
-        {%- endif %}
-    {%- else %}
+        {% endif %}
+    {% else %}
     {{ _init_simple_field(field, type_token) }}
-    {%- endif %}
+    {% endif %}
     {% endfor %}
     return msg
 {% endmacro %}
@@ -213,7 +217,7 @@ def traces(draw):
         {% if pub.strategies %}
     elems = {{ pub.strategies[-1] }}()
         {% else %}
-    elems = {{ _type_to_strategy(pub.type_name) }}()
+    elems = {{ _type_to_strategy(pub.type_token.type_name) }}()
         {% endif %}
     msgs = draw(strategies.lists(elems, min_size=0, max_size=3))
     for msg in msgs:
@@ -324,9 +328,9 @@ class TestTracer(unittest.TestCase):
                 {% endif %}
             assert self.main_monitor.at_least_once
             {% endif %}
-        #except AssertionError as e:
+        {#except AssertionError as e:
         #    self._report_trace(trace, hz)
-        #    raise e
+        #    raise e #}
         finally:
             self._report_msg_log()
             self._teardown_sut()
@@ -433,7 +437,7 @@ class TestTracer(unittest.TestCase):
             for sub in self.subs.values():
                 assert sub.ready, "Failed to find " + sub.resolved_name
 
-    def _report_trace(self, trace, hz):
+{#  def _report_trace(self, trace, hz):
         if not trace.chunks:
             print "Property failed; no messages were sent to the system."
         else:
@@ -445,7 +449,7 @@ class TestTracer(unittest.TestCase):
                     print ">> Publish on {}".format(repr(
                         self.pubs[i][0].resolved_name))
                     print str(msg)
-
+#}
     def log_msg(self, topic, msg, time, sent=False):
         self.msg_log.append((topic, msg, time, sent))
 

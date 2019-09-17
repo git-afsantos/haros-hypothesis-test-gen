@@ -50,7 +50,7 @@ class EventTemplate(object):
                  "seq_timer", "is_leaf", "external_timer", "is_under_timer",
                  "is_activator", "is_terminator", "is_trigger", "is_behaviour",
                  "dependencies", "dep_conditions", "log_level", "log_gap",
-                 "log_age", "reads_state", "subsumes")
+                 "log_age", "reads_state", "subsumes", "msg_type")
 
     def __init__(self, uid, event):
         self.uid = uid # tuple(string | int)
@@ -59,6 +59,7 @@ class EventTemplate(object):
         self.alias = event.alias # string
         self.event_type = event.event_type # enum
         self.topic = event.topic # string
+        self.msg_type = None # string
         self.strategy = None # string
         self.delay = event.delay # float
         self.duration = event.duration # float
@@ -203,7 +204,7 @@ class MonitorTemplate(object):
         self.aliases = {} # {string (alias): EventTemplate}
         self.scope_timeout = hpl_property.scope.timeout
         self._set_events(hpl_property)
-        self._set_external_events(pubbed_topics, subbed_topics)
+        self._annotate_events(pubbed_topics, subbed_topics)
         self.subs = self._make_subs(hpl_property, pubbed_topics, subbed_topics)
         self.hpl_string = str(hpl_property)
 
@@ -487,11 +488,14 @@ class MonitorTemplate(object):
                 event.conditions[i] = new_cond
         return inc
 
-    def _set_external_events(self, pubbed_topics, subbed_topics):
+    def _annotate_events(self, pubbed_topics, subbed_topics):
         for event in self.events:
-            if event.topic not in pubbed_topics:
+            if event.topic in pubbed_topics:
+                event.msg_type = pubbed_topics[event.topic].type_name
+            else:
                 assert event.topic in subbed_topics
                 event.is_external = True
+                event.msg_type = subbed_topics[event.topic].type_name
 
     def _make_subs(self, prop, pubbed_topics, subbed_topics):
         subs = {}
