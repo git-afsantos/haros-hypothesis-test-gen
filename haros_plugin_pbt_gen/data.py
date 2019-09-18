@@ -723,10 +723,13 @@ class MultiGeneratorView(FieldGenerator):
     length of the array.
     """
 
-    __slots__ = ("fields", "reducer")
+    __slots__ = ("fields", "ros_type", "reducer")
 
     def __init__(self, fields, reducer=None):
+        ros_types = set(f.ros_type for f in fields)
+        assert len(ros_types) <= 1
         self.fields = fields
+        self.ros_type = None if not fields else fields[0].ros_type
         self.reducer = reducer
 
     @classmethod
