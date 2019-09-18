@@ -156,11 +156,13 @@ class TestGenerator(object):
         for topic in self.config.topics.enabled:
             if topic.subscribers and not topic.publishers:
                 if topic.unresolved:
-                    self.iface.log_warning("Skipping unresolved topic %s (%s).",
+                    msg = "Skipping unresolved topic {} ({}).".format(
                         topic.rosname.full, self.config.name)
+                    self.iface.log_warning(msg)
                 elif topic.rosname.full in ignored:
-                    self.iface.log_warning("Skipping ignored topic %s (%s).",
+                    msg = "Skipping ignored topic {} ({}).".format(
                         topic.rosname.full, self.config.name)
+                    self.iface.log_warning(msg)
                 else:
                     subbed[topic.rosname.full] = get_type(topic.type)
         return subbed
@@ -170,13 +172,15 @@ class TestGenerator(object):
         pubbed = {} # topic -> msg_type (TypeToken)
         for topic in self.config.topics.enabled:
             if topic.unresolved:
-                self.iface.log_warning("Skipping unresolved topic %s (%s).",
+                msg = "Skipping unresolved topic {} ({}).".format(
                     topic.rosname.full, self.config.name)
+                self.iface.log_warning(msg)
                 continue
             if topic.publishers:
                 if topic.rosname.full in ignored:
-                    self.iface.log_warning("Skipping ignored topic %s (%s).",
+                    msg = "Skipping ignored topic {} ({}).".format(
                         topic.rosname.full, self.config.name)
+                    self.iface.log_warning(msg)
                 else:
                     pubbed[topic.rosname.full] = get_type(topic.type)
         return pubbed
