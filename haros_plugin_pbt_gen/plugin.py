@@ -124,15 +124,11 @@ class TestGenerator(object):
         for i in range(len(self.properties)):
             p = self.properties[i]
             mon = MonitorTemplate(i, p, self.pubbed_topics, self.subbed_topics)
-            custom = CustomStrategyBuilder()
-            try:
-                custom.fake_strategies(mon) # type checking
-            except SpecError as e:
-                return self.iface.log_error(str(e))
             all_monitors.append(mon)
             if mon.is_testable:
                 publishers = self._get_publishers(mon.terminator)
                 # custom.make_strategies() may change publishers
+                custom = CustomStrategyBuilder()
                 custom.make_strategies(mon, publishers, self.assumptions)
                 custom.pkg_imports.update(self.pkg_imports)
                 publishers = list(publishers.values())
@@ -388,13 +384,14 @@ class CustomStrategyBuilder(object):
 
     def fake_strategies(self, monitor):
         # this is basically just type checking
+        # FIXME this is not working yet - cannot deal with aliases
         for event in monitor.events:
             type_token = get_type(event.msg_type)
             try:
                 strategy = self._msg_generator(type_token, event.conditions)
                 strategy.build()
             except (KeyError, IndexError) as e:
-                raise SpecError("unable to find field :" + str(e))
+                raise SpecError("unable to find field:" + str(e))
             except CyclicDependencyError as e:
                 raise SpecError("found cyclic dependencies: " + str(e))
             except InvalidFieldOperatorError as e:
