@@ -97,7 +97,11 @@ e.state[{{ value }}]
     {% set _f_loops, _rem_expr = condition.field.loops() %}
     {% for accessors, it in _f_loops -%}
         {% set _array = _field_parts_to_str(ns.root, accessors) %}
-        {% set ns.root = 'x' ~ loop.index %}
+        {% if '\\' in it.key %}
+            {% set _array = 'all_except(' ~ _array ~ ', ('
+                ~ it.key[2:] ~ ',))' %}
+        {% endif %}
+        {% set ns.root = 'x' ~ loop.index %}{# -#}
         {{ ns.py.append('for x' ~ loop.index ~ ' in ' ~ _array)|d("", true) }}
     {%- endfor %}
     {% set ref = _field_parts_to_str(ns.root, _rem_expr) %}
@@ -108,6 +112,18 @@ all({{ _field_clause(ref, condition.operator, condition.value) }} {# -#}
     {{ _field_clause(ref, condition.operator, condition.value) }}
 {%- endif %}
 {%- endmacro %}
+
+
+{% macro _inline_conditions(conditions) %}
+{% for condition in conditions %} and {{ _field_condition(condition) }}{# -#}
+{% endfor %}
+{% endmacro %}
+
+{% macro _length_conditions(event) %}
+{% for array, min_length in event.length_conditions %} and {# -#}
+len(msg.{{ array }}) >= {{ min_length }}{# -#}
+{% endfor %}
+{% endmacro %}
 
 
 {% macro _check_dep_log(event) %}
@@ -124,8 +140,7 @@ requirement = False
 for entry in self.{{ dep.var_name }}.log:
     age = seq_start - entry.time
     if age >= {{ dep.log_gap }} and age <= {{ dep.log_age }}{# -#}
-            {% for ec in event.get_dep_conditions(dep.key()) %} and {# -#}
-                {{ _field_condition(ec) }}{% endfor %}:
+            {{ _inline_conditions(event.get_dep_conditions(dep.key())) }}:
         requirement = True
         break
     {% elif dep.log_level == 1 %}
@@ -207,8 +222,9 @@ class {{ event.class_name }}(EventListener):
         forks = 0
         timed_out = 0
         {% if not event.reads_state %}
-        condition = True{% for ec in event.conditions %} and {# -#}
-                {{ _field_condition(ec) }}{% endfor %}
+        condition = True{# -#}
+            {{ _length_conditions(event) }}{# -#}
+            {{ _inline_conditions(event.conditions) }}
         {% endif %}
         i = len(self.active) - 1
         while i >= 0:
@@ -217,8 +233,9 @@ class {{ event.class_name }}(EventListener):
                 del self.active[i]
                 timed_out += ((not e.subsumed and not e.matches) and 1) or 0
             {% if event.reads_state %}
-            elif time >= e.min_time{% for ec in event.conditions %} and {# -#}
-                {{ _field_condition(ec) }}{% endfor %}:
+            elif time >= e.min_time{# -#}
+                {{ _length_conditions(event) }}{# -#}
+                {{ _inline_conditions(event.conditions) }}:
                 {% if event.dependencies %}
 {{ _check_dep_log(event)|indent(width=16, first=true) }}
                 {% endif %}

@@ -22,6 +22,13 @@
 
 
 ###############################################################################
+# Imports
+###############################################################################
+
+from builtins import range # Python 2 and 3: forward-compatible
+
+
+###############################################################################
 # Field Selector
 ###############################################################################
 
@@ -79,8 +86,15 @@ class DynamicAccessor(Accessor):
 
     def _make_predicate(self, field_name):
         assert field_name.startswith("*")
+        if field_name == "*":
+            return _universal
+        star, indices = field_name.split("\\")
+        indices = map(int, indices.split(","))
+        return self._all_except(indices)
+
+    def _all_except(self, indices):
         def predicate(key):
-            return True
+            return key not in indices
         return predicate
 
 
@@ -112,7 +126,7 @@ class Selector(object):
 
     @property
     def field_name(self):
-        return self.accessors[-1].name
+        return self.accessors[-1].field_name
 
     @property
     def ros_type(self):
@@ -124,6 +138,31 @@ class Selector(object):
             if accessor.is_dynamic:
                 return True
         return False
+
+    @property
+    def is_array_field(self):
+        return (len(self.accessors) >= 2
+                and self.accessors[-2].ros_type.is_array)
+
+    def subselect(self, n):
+        if n <= 0:
+            raise IndexError(n)
+        if n >= len(self.accessors):
+            return self
+        parts = [self.accessors[0].field_name]
+        array = self.accessors[0].ros_type.is_array
+        for i in range(1, n):
+            f = self.accessors[i]
+            if array:
+                parts.append("[")
+                parts.append(f.field_name)
+                parts.append("]")
+            else:
+                parts.append(".")
+                parts.append(f.field_name)
+            array = f.ros_type.is_array
+        selector = Selector("".join(parts), self.base_type)
+        return selector
 
     def _array_access(self, field_name, array_type):
         if field_name.startswith(self._DYNAMIC):
@@ -153,3 +192,11 @@ class Selector(object):
 
     def __repr__(self):
         return "Selector({}, {})".format(self.expression, repr(self.base_type))
+
+
+###############################################################################
+# Predicates
+###############################################################################
+
+def _universal(key):
+    return True

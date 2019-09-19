@@ -50,9 +50,15 @@ for {{ statement.variable }} in {{ statement.expression }}:
     with one message per chunk. #}
 {% macro _chunks_for_sequence(event) -%}
 {% if event.strategy %}
-msg = (draw({{ event.strategy }}()), "{{ event.topic }}")
+    {% set strat = event.strategy.name %}
+    {% set args = event.strategy.args|join(', ') %}
 {% else %}
-msg = (draw({{ _type_to_strategy(event.msg_type) }}()), "{{ event.topic }}")
+    {% set strat = _type_to_strategy(event.msg_type) %}
+    {% set args = '' %}
+{% endif %}
+msg = (draw({{ strat }}({{ args }})), "{{ event.topic }}")
+{% if event.alias %}
+msg_{{ event.alias }} = msg
 {% endif %}
 chunks.append(Chunk(msgs=[msg], delay={{ event.delay }}))
     {% if event.forks and not event.is_leaf %}
@@ -193,11 +199,15 @@ def {{ _strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
     from a given list of statements. The statements determine which values
     to assign to each field, as well as any additional constraints that
     must be satisfied. #}
-{% macro custom_msg(name, pkg, msg, statements) %}
+{% macro custom_msg(strategy) %}
 @strategies.composite
-def {{ name }}(draw):
-    msg = {{ pkg }}.{{ msg }}()
-{% for statement in statements %}
+{% if strategy.args %}
+def {{ strategy.name }}(draw, {{ strategy.args|join(', ') }}):
+{% else %}
+def {{ strategy.name }}(draw):
+{% endif %}
+    msg = {{ strategy.pkg }}.{{ strategy.msg }}()
+{% for statement in strategy.statements %}
 {{ _statement(statement)|indent(width=4, first=True) }}
 {% endfor %}
     return msg
@@ -215,7 +225,7 @@ def traces(draw):
     all_msgs = []
     {% for pub in pubs %}
         {% if pub.strategies %}
-    elems = {{ pub.strategies[-1] }}()
+    elems = {{ pub.strategies[-1].name }}()
         {% else %}
     elems = {{ _type_to_strategy(pub.type_token.type_name) }}()
         {% endif %}

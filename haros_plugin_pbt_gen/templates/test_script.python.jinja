@@ -169,6 +169,11 @@ def range_excluding(start, end, exclude):
         if i not in exclude:
             yield i
 
+def all_except(array, exclude):
+    for i in range(len(array)):
+        if i not in exclude:
+            yield array[i]
+
 {% import 'specs.python.jinja' as specs %}
 
 ################################################################################
@@ -189,7 +194,7 @@ def range_excluding(start, end, exclude):
 
 {% for entry in custom_strategies %}
 
-{{ strats.custom_msg(entry.name, entry.pkg, entry.msg, entry.statements) }}
+{{ strats.custom_msg(entry) }}
 {% endfor %}
 
 ################################################################################

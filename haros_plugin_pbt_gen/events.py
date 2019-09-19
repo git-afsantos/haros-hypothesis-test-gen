@@ -50,7 +50,8 @@ class EventTemplate(object):
                  "seq_timer", "is_leaf", "external_timer", "is_under_timer",
                  "is_activator", "is_terminator", "is_trigger", "is_behaviour",
                  "dependencies", "dep_conditions", "log_level", "log_gap",
-                 "log_age", "reads_state", "subsumes", "msg_type")
+                 "log_age", "reads_state", "subsumes", "msg_type",
+                 "length_conditions")
 
     def __init__(self, uid, event):
         self.uid = uid # tuple(string | int)
@@ -65,6 +66,7 @@ class EventTemplate(object):
         self.duration = event.duration # float
         self.conditions = list(event.msg_filter.conditions)
         self.dep_conditions = {} # {tuple(event key): [HplFieldCondition]}
+        self.length_conditions = [] # [(string (array), int (min. length))]
         self.ref_count = 0 # int    references to this event
         self.forks = [] # [EventTemplate]
         self.dependencies = [] # [EventTemplate]
@@ -119,6 +121,9 @@ class EventTemplate(object):
 
     def get_dep_conditions(self, key):
         return self.dep_conditions.get(key, [])
+
+    def add_length_condition(self, field_token, min_length):
+        self.length_conditions.append((field_token, min_length))
 
     def _set_class_name(self):
         parts = [str(i) for i in self.uid]
@@ -274,7 +279,6 @@ class MonitorTemplate(object):
         if hpl_property.scope.terminator is not None:
             self._set_terminator(hpl_property.scope.terminator)
         self._link_events()
-        self._set_variables()
 
     def _set_activator(self, top_level_event):
         self.activator = CompositeEventTemplate((self.uid, 1), top_level_event)
@@ -369,7 +373,7 @@ class MonitorTemplate(object):
             for event in self.trigger.leaves:
                 event.forks.extend(self.behaviour.roots)
 
-    def _set_variables(self):
+    def variable_substitution(self):
         var_count = 0
         s = self.is_safety
         for event in self.events:

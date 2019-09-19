@@ -52,6 +52,11 @@ def range_excluding(start, end, exclude):
         if i not in exclude:
             yield i
 
+def all_except(array, exclude):
+    for i in range(len(array)):
+        if i not in exclude:
+            yield array[i]
+
 {% import 'specs.python.jinja' as specs %}
 
 

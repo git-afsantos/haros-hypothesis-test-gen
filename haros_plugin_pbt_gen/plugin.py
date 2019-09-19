@@ -34,7 +34,9 @@ from haros.hpl.ros_types import get_type
 from jinja2 import Environment, PackageLoader
 
 from .events import MonitorTemplate
-from .data import MessageStrategyGenerator
+from .data import (
+    MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
+)
 from .selectors import Selector
 
 
@@ -87,7 +89,7 @@ TestTemplate = namedtuple("TestTemplate", ("monitor", "custom_strategies",
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
 CustomMsgStrategy = namedtuple("CustomMsgStrategy",
-    ("name", "pkg", "msg", "statements"))
+    ("name", "args", "pkg", "msg", "statements"))
 
 
 class SpecError(Exception):
@@ -118,16 +120,19 @@ class TestGenerator(object):
 
     def make_tests(self):
         all_monitors = []
+        tests = []
         for i in range(len(self.properties)):
             p = self.properties[i]
             mon = MonitorTemplate(i, p, self.pubbed_topics, self.subbed_topics)
+            custom = CustomStrategyBuilder()
+            try:
+                custom.fake_strategies(mon) # type checking
+            except SpecError as e:
+                return self.iface.log_error(str(e))
             all_monitors.append(mon)
-        tests = []
-        for mon in all_monitors:
             if mon.is_testable:
                 publishers = self._get_publishers(mon.terminator)
-                # _custom_strategies() may change publishers
-                custom = CustomStrategyBuilder()
+                # custom.make_strategies() may change publishers
                 custom.make_strategies(mon, publishers, self.assumptions)
                 custom.pkg_imports.update(self.pkg_imports)
                 publishers = list(publishers.values())
@@ -140,6 +145,8 @@ class TestGenerator(object):
                        "following property: ")
                 msg += mon.hpl_string
                 self.iface.log_warning(msg)
+            mon.variable_substitution()
+            self._inject_array_length(mon)
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
@@ -265,6 +272,61 @@ class TestGenerator(object):
                     topic, type_token, rospy_type, [])
         return pubs
 
+    def _inject_array_length(self, monitor):
+        for event in monitor.events:
+            lengths = {}
+            try:
+                type_token = self.pubbed_topics[event.topic]
+            except KeyError:
+                try:
+                    type_token = self.subbed_topics[event.topic]
+                except KeyError:
+                    raise SpecError("Unknown topic: '{}'".format(event.topic))
+            for condition in event.conditions:
+                self._length_for_field(condition.field.token,
+                    type_token, lengths)
+                self._length_for_value(condition.value, type_token, lengths)
+            for field_token in event.saved_vars.values():
+                self._length_for_field(field_token, type_token, lengths)
+            for token, min_length in lengths.items():
+                event.add_length_condition(token, min_length)
+
+    def _length_for_field(self, field_token, type_token, lengths):
+        selector = Selector(field_token, type_token)
+        array_expr = None
+        for i in range(len(selector.accessors)):
+            f = selector.accessors[i]
+            if f.ros_type.is_array and not f.ros_type.is_fixed_length:
+                field = selector.subselect(i+1)
+                array_expr = field.expression
+            elif array_expr is not None:
+                min_len = lengths.get(array_expr, 0)
+                if f.is_range:
+                    pass # TODO
+                elif not f.is_dynamic:
+                    min_len = max(min_len, int(f.field_name) + 1)
+                    if min_len > 0:
+                        lengths[array_expr] = min_len
+                array_expr = None
+
+    def _length_for_value(self, hpl_value, type_token, lengths):
+        if hpl_value.is_literal:
+            return
+        if hpl_value.is_reference:
+            if hpl_value.message is not None:
+                return
+            if hpl_value.token in type_token.constants:
+                return
+            self._length_for_field(hpl_value.token, type_token, lengths)
+        elif hpl_value.is_range:
+            self._length_for_value(hpl_value.lower_bound, type_token, lengths)
+            self._length_for_value(hpl_value.upper_bound, type_token, lengths)
+        elif hpl_value.is_set:
+            for v in hpl_value.values:
+                self._length_for_value(v, type_token, lengths)
+        elif not hpl_value.is_variable:
+            raise TypeError("unknown value type: " + type(hpl_value).__name__)
+
     def _apply_slack(self, monitor):
         slack = self.settings.get("slack", 0.0)
         if slack < 0.0:
@@ -324,6 +386,20 @@ class CustomStrategyBuilder(object):
         self.pkg_imports = set()
         self.types_by_message = {}
 
+    def fake_strategies(self, monitor):
+        # this is basically just type checking
+        for event in monitor.events:
+            type_token = get_type(event.msg_type)
+            try:
+                strategy = self._msg_generator(type_token, event.conditions)
+                strategy.build()
+            except (KeyError, IndexError) as e:
+                raise SpecError("unable to find field :" + str(e))
+            except CyclicDependencyError as e:
+                raise SpecError("found cyclic dependencies: " + str(e))
+            except InvalidFieldOperatorError as e:
+                raise SpecError("invalid use of operator " + str(e))
+
     def make_strategies(self, monitor, publishers, assumptions):
         self.strategies = []
         for topic, pub in publishers.items():
@@ -359,7 +435,7 @@ class CustomStrategyBuilder(object):
                         self.pkg_imports.add(pub.type_token.package)
                         strat = self._event(event, pub, negate=True)
                         self.strategies.append(strat)
-                        pub.strategies.append(strat.name)
+                        pub.strategies.append(strat)
             elif monitor.is_liveness:
                 # the whole chain must happen
                 for event in trigger.events:
@@ -377,7 +453,7 @@ class CustomStrategyBuilder(object):
         type_token = publisher.type_token
         self.types_by_message[None] = type_token
         strategy = self._strategy(type_token, msg_filter.conditions)
-        publisher.strategies.append(strategy.name)
+        publisher.strategies.append(strategy)
         return strategy
 
     def _event(self, event, publisher, negate=False):
@@ -392,17 +468,24 @@ class CustomStrategyBuilder(object):
         else:
             conditions = event.conditions
         strategy = self._strategy(type_token, conditions)
-        event.strategy = strategy.name
+        event.strategy = strategy
         return strategy
 
     def _strategy(self, type_token, conditions):
+        strategy = self._msg_generator(type_token, conditions)
+        i = len(self.strategies) + 1
+        name = "cms{}_{}_{}".format(i, type_token.package, type_token.message)
+        return CustomMsgStrategy(name, strategy.args, type_token.package,
+                                 type_token.message, strategy.build())
+
+    def _msg_generator(self, type_token, conditions):
         strategy = MessageStrategyGenerator(type_token)
         for condition in conditions:
             selector = Selector(condition.field.token, type_token)
             strategy.ensure_generator(selector)
         for condition in conditions:
             selector = Selector(condition.field.token, type_token)
-            value = self._value(condition.value)
+            value = self._value(condition.value, strategy)
             if condition.is_eq:
                 strategy.set_eq(selector, value)
             elif condition.is_neq:
@@ -430,16 +513,13 @@ class CustomStrategyBuilder(object):
             elif condition.is_not_in:
                 if condition.value.is_range:
                     strategy.set_not_in_range(selector, value[0], value[1],
-                        exclude_min=condition.value.exclude_min,
-                        exclude_max=condition.value.exclude_max)
+                        exclude_min=condition.value.exclude_lower,
+                        exclude_max=condition.value.exclude_upper)
                 else:
                     strategy.set_not_in(selector, value)
-        i = len(self.strategies) + 1
-        name = "cms{}_{}_{}".format(i, type_token.package, type_token.message)
-        return CustomMsgStrategy(
-            name, type_token.package, type_token.message, strategy.build())
+        return strategy
 
-    def _value(self, hpl_value):
+    def _value(self, hpl_value, strategy):
         if hpl_value.is_reference:
             type_token = self.types_by_message[hpl_value.message]
             # check for constants
@@ -447,12 +527,15 @@ class CustomStrategyBuilder(object):
                 ros_literal = type_token.constants.get(hpl_value.token)
                 if ros_literal is not None:
                     return ros_literal.value
-            return Selector(hpl_value.token, type_token)
+            selector = Selector(hpl_value.token, type_token)
+            if hpl_value.message is None:
+                return selector
+            return strategy.make_msg_arg(hpl_value.message, selector)
         if hpl_value.is_literal:
             return hpl_value.value
         if hpl_value.is_range:
-            return (self._value(hpl_value.lower_bound),
-                    self._value(hpl_value.upper_bound))
+            return (self._value(hpl_value.lower_bound, strategy),
+                    self._value(hpl_value.upper_bound, strategy))
         if hpl_value.is_set:
-            return tuple(self._value(v) for v in hpl_value.values)
-        raise TypeError("unknown value type: " + str(type(hpl_value)))
+            return tuple(self._value(v, strategy) for v in hpl_value.values)
+        raise TypeError("unknown value type: " + type(hpl_value).__name__)

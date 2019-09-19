@@ -92,10 +92,11 @@ class CyclicDependencyError(MessageFilterError):
 # added afterwards.
 
 class MessageStrategyGenerator(object):
-    __slots__ = ("root", "_build_number")
+    __slots__ = ("root", "args", "_build_number")
 
     def __init__(self, type_token):
         self.root = RootFieldGenerator(type_token)
+        self.args = [] # [string] - order is important
         self._build_number = 0
 
     def ensure_generator(self, selector):
@@ -117,12 +118,23 @@ class MessageStrategyGenerator(object):
             queue = self._build_statements(statements, queue)
         return statements
 
+    def make_msg_arg(self, name, selector):
+        arg_name = "msg_" + name
+        if arg_name not in self.args:
+            self.args.append(arg_name)
+        if not isinstance(selector, Selector):
+            raise TypeError("expected Selector, got " + type(selector).__name__)
+        if selector.is_dynamic:
+            raise ValueError("dynamic selectors are not supported: "
+                             + selector.expression)
+        return _ArgReference(arg_name, selector)
+
     def set_eq(self, selector, value):
         field = self._select(selector)
         if isinstance(value, Selector):
             other = self._select(value, allow_multiple=False, invalidate=True)
             value = _LocalReference(other, FieldGenerator.INITIALIZED)
-        else:
+        elif not isinstance(value, _ArgReference):
             value = _LiteralWrapper(value)
         field.eq(value)
 
@@ -131,7 +143,7 @@ class MessageStrategyGenerator(object):
         if isinstance(value, Selector):
             other = self._select(value)
             value = _LocalReference(other, FieldGenerator.FINALIZED)
-        else:
+        elif not isinstance(value, _ArgReference):
             value = _LiteralWrapper(value)
         field.neq(value)
 
@@ -142,7 +154,7 @@ class MessageStrategyGenerator(object):
             other = self._select(value, reducer="max", invalidate=True)
             assert other.ros_type.is_number
             value = _LocalReference(other, FieldGenerator.FINALIZED)
-        else:
+        elif not isinstance(value, _ArgReference):
             value = _LiteralWrapper(value)
         field.lt(value)
 
@@ -153,7 +165,7 @@ class MessageStrategyGenerator(object):
             other = self._select(value, reducer="max", invalidate=True)
             assert other.ros_type.is_number
             value = _LocalReference(other, FieldGenerator.FINALIZED)
-        else:
+        elif not isinstance(value, _ArgReference):
             value = _LiteralWrapper(value)
         field.lte(value)
 
@@ -164,7 +176,7 @@ class MessageStrategyGenerator(object):
             other = self._select(value, reducer="min", invalidate=True)
             assert other.ros_type.is_number
             value = _LocalReference(other, FieldGenerator.FINALIZED)
-        else:
+        elif not isinstance(value, _ArgReference):
             value = _LiteralWrapper(value)
         field.gt(value)
 
@@ -175,7 +187,7 @@ class MessageStrategyGenerator(object):
             other = self._select(value, reducer="min", invalidate=True)
             assert other.ros_type.is_number
             value = _LocalReference(other, FieldGenerator.FINALIZED)
-        else:
+        elif not isinstance(value, _ArgReference):
             value = _LiteralWrapper(value)
         field.gte(value)
 
@@ -187,7 +199,7 @@ class MessageStrategyGenerator(object):
                 other = self._select(value, allow_multiple=False,
                                      invalidate=True)
                 value = _LocalReference(other, FieldGenerator.INITIALIZED)
-            else:
+            elif not isinstance(value, _ArgReference):
                 value = _LiteralWrapper(value)
             new_values.append(value)
         field.in_set(new_values)
@@ -199,7 +211,7 @@ class MessageStrategyGenerator(object):
             if isinstance(value, Selector):
                 other = self._select(value, allow_multiple=False)
                 value = _LocalReference(other, FieldGenerator.FINALIZED)
-            else:
+            elif not isinstance(value, _ArgReference):
                 value = _LiteralWrapper(value)
             new_values.append(value)
         field.not_in(new_values)
@@ -210,12 +222,12 @@ class MessageStrategyGenerator(object):
         if isinstance(min_value, Selector):
             other = self._select(min_value, allow_multiple=False)
             min_value = _LocalReference(other, FieldGenerator.FINALIZED)
-        else:
+        elif not isinstance(min_value, _ArgReference):
             min_value = _LiteralWrapper(min_value)
         if isinstance(max_value, Selector):
             other = self._select(max_value, allow_multiple=False)
             max_value = _LocalReference(other, FieldGenerator.FINALIZED)
-        else:
+        elif not isinstance(max_value, _ArgReference):
             max_value = _LiteralWrapper(max_value)
         field.not_in_range(min_value, max_value, exclude_min, exclude_max)
 
@@ -457,16 +469,16 @@ class CompositeFieldGenerator(FieldGenerator):
         return self.fields[accessor.field_name]
 
     def lt(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("<")
 
     def lte(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("<=")
 
     def gt(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError(">")
 
     def gte(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError(">=")
 
     def noop_tree(self):
         fields = list(self.fields.values())
@@ -523,28 +535,28 @@ class RootFieldGenerator(FieldGenerator):
         return self.fields[accessor.field_name]
 
     def eq(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("=")
 
     def neq(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("!=")
 
     def lt(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("<")
 
     def lte(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("<=")
 
     def gt(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError(">")
 
     def gte(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError(">=")
 
     def in_set(self, values):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("in")
 
     def not_in(self, values):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("not in")
 
     def _initialized(self, build_number):
         return True
@@ -605,16 +617,16 @@ class ArrayFieldGenerator(FieldGenerator):
             return self._get_static_field(accessor)
 
     def lt(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("<")
 
     def lte(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError("<=")
 
     def gt(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError(">")
 
     def gte(self, value):
-        raise InvalidFieldOperatorError()
+        raise InvalidFieldOperatorError(">=")
 
     def _get_multifield(self, accessor):
         # NOTE: This assumes that all static generators are already present.
@@ -638,7 +650,7 @@ class ArrayFieldGenerator(FieldGenerator):
         if self.ros_type.is_fixed_length:
             if index >= self.ros_type.length:
                 raise IndexError(field_name)
-        elif index > self.min_length:
+        elif index >= self.min_length:
             self.min_length = index + 1
         field = self.fields.get(index)
         if field is None:
@@ -794,7 +806,7 @@ class MultiGeneratorView(FieldGenerator):
             field.not_in(values)
 
     def _template(self):
-        fields = ", ".join(field._template for field in self.fields)
+        fields = ", ".join(field._template() for field in self.fields)
         if self.reducer is not None:
             return "{}({})".format(self.reducer, fields)
         return "({},)".format(fields)
@@ -1249,6 +1261,10 @@ class _ValueWrapper(object):
     def is_local_reference(self):
         assert False, "subclasses must implement this"
 
+    @property
+    def is_arg_reference(self):
+        assert False, "subclasses must implement this"
+
     def available(self, build_number):
         assert False, "subclasses must implement this"
 
@@ -1268,6 +1284,10 @@ class _LiteralWrapper(_ValueWrapper):
 
     @property
     def is_local_reference(self):
+        return False
+
+    @property
+    def is_arg_reference(self):
         return False
 
     def available(self, build_number):
@@ -1306,6 +1326,10 @@ class _LocalReference(_ValueWrapper):
         return True
 
     @property
+    def is_arg_reference(self):
+        return False
+
+    @property
     def type_name(self):
         return self.field.ros_type.type_name
 
@@ -1330,6 +1354,48 @@ class _LocalReference(_ValueWrapper):
 
     def __str__(self):
         return self.field.expression
+
+
+################################################################################
+# Internal Structures: Function Argument References
+################################################################################
+
+class _ArgReference(_ValueWrapper):
+    __slots__ = _ValueWrapper.__slots__ + ("arg_name", "selector")
+
+    def __init__(self, arg_name, selector):
+        self.arg_name = arg_name
+        self.selector = selector
+
+    @property
+    def is_literal(self):
+        return False
+
+    @property
+    def is_local_reference(self):
+        return False
+
+    @property
+    def is_arg_reference(self):
+        return True
+
+    def available(self, build_number):
+        return True
+
+    def loops(self, var="i"):
+        return ()
+
+    def __eq__(self, other):
+        if not isinstance(other, _ArgReference):
+            return False
+        return (self.arg_name == other.arg_name
+                and self.selector == other.selector)
+
+    def __hash__(self):
+        return 31 * hash(self.arg_name) + hash(self.selector)
+
+    def __str__(self):
+        return "".join((self.arg_name, ".", self.selector.expression))
 
 
 ################################################################################
