@@ -61,10 +61,10 @@ msg = (draw({{ strat }}({{ args }})), "{{ event.topic }}")
 msg_{{ event.alias }} = msg
 {% endif %}
 chunks.append(Chunk(msgs=[msg], delay={{ event.delay }}))
-    {% if event.forks and not event.is_leaf %}
+    {% if event.forks and not event.is_leaf -%}
     {# NOTE in a normal sequence, an event should only have one fork #}
 {{ _chunks_for_sequence(event.forks[0]) }}
-    {% endif %}
+    {%- endif %}
 {%- endmacro %}
 
 {# Transforms a top-level disjunction of event chains into a sequence of
@@ -107,6 +107,7 @@ else:
 # chunks for trigger sequence
 chunks = [Chunk()]
 {{ _chunks_for_disjunction(trigger.roots) }}
+{#- #}
 n = len(all_msgs)
 k = 0
 i = 0
