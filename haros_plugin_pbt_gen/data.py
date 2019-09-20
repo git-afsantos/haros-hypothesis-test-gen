@@ -231,6 +231,42 @@ class MessageStrategyGenerator(object):
             max_value = _LiteralWrapper(max_value)
         field.not_in_range(min_value, max_value, exclude_min, exclude_max)
 
+    def set_attr_eq(self, selector, value, attr):
+        assert selector.ros_type.is_array
+        field = self._select(selector)
+        value = _LiteralWrapper(value)
+        field.eq(value, attr=attr)
+
+    def set_attr_neq(self, selector, value, attr):
+        assert selector.ros_type.is_array
+        field = self._select(selector)
+        value = _LiteralWrapper(value)
+        field.neq(value, attr=attr)
+
+    def set_attr_lt(self, selector, value, attr):
+        assert selector.ros_type.is_array
+        field = self._select(selector)
+        value = _LiteralWrapper(value)
+        field.lt(value, attr=attr)
+
+    def set_attr_lte(self, selector, value, attr):
+        assert selector.ros_type.is_array
+        field = self._select(selector)
+        value = _LiteralWrapper(value)
+        field.lte(value, attr=attr)
+
+    def set_attr_gt(self, selector, value, attr):
+        assert selector.ros_type.is_array
+        field = self._select(selector)
+        value = _LiteralWrapper(value)
+        field.gt(value, attr=attr)
+
+    def set_attr_gte(self, selector, value, attr):
+        assert selector.ros_type.is_array
+        field = self._select(selector)
+        value = _LiteralWrapper(value)
+        field.gte(value, attr=attr)
+
     def _select(self, selector, allow_multiple=True, reducer=None,
                 invalidate=False):
         multiple = False
@@ -578,12 +614,19 @@ class RootFieldGenerator(FieldGenerator):
 # intervals (e.g. adding [2] changes the interval into [0:2] + [3:length]).
 
 class ArrayFieldGenerator(FieldGenerator):
-    __slots__ = FieldGenerator.__slots__ + (
-        "min_length", "by_default", "fields")
+    __slots__ = FieldGenerator.__slots__ + ("set_length", "min_length",
+        "max_length", "neq_length", "by_default", "fields")
+
+    _ATTRS = ("length",)
+
+    _UNK_ATTR = "unknown array attribute: '{}'"
 
     def __init__(self, expression, type_token, parent):
         FieldGenerator.__init__(self, expression, type_token, parent)
+        self.set_length = type_token.length
         self.min_length = type_token.length or 0
+        self.max_length = type_token.length
+        self.neq_length = set()
         self.by_default = _make_generator(expression, type_token.type_token,
                                           self, nest=True)
         self.by_default.ranged = True
@@ -616,17 +659,119 @@ class ArrayFieldGenerator(FieldGenerator):
         else:
             return self._get_static_field(accessor)
 
-    def lt(self, value):
-        raise InvalidFieldOperatorError("<")
+    def eq(self, value, attr=None):
+        if attr is None:
+            return FieldGenerator.eq(self, value)
+        if attr == "length":
+            assert isinstance(value, _LiteralWrapper)
+            n = value.value
+            if self.set_length is None:
+                if self.min_length > n:
+                    msg = "cannot set {} length to {} and >={}"
+                    msg = msg.format(self.expression, n, self.min_length)
+                    raise ValueError(msg)
+                if self.max_length is not None and self.max_length < n:
+                    msg = "cannot set {} length to {} and <={}"
+                    msg = msg.format(self.expression, n, self.max_length)
+                    raise ValueError(msg)
+                if n in self.neq_length:
+                    msg = "cannot set {} length to {} and !={}"
+                    msg = msg.format(self.expression, n, n)
+                    raise ValueError(msg)
+                self.set_length = self.min_length = self.max_length = n
+            else:
+                if self.set_length != n:
+                    raise ValueError("cannot set {} length to {} and {}".format(
+                        self.expression, self.set_length, n))
+        else:
+            raise ValueError(self._UNK_ATTR.format(attr))
 
-    def lte(self, value):
-        raise InvalidFieldOperatorError("<=")
+    def neq(self, value, attr=None):
+        if attr is None:
+            return FieldGenerator.neq(self, value)
+        if attr == "length":
+            assert isinstance(value, _LiteralWrapper)
+            n = value.value
+            if self.set_length == n:
+                msg = "cannot set {} length to {} and !={}"
+                msg = msg.format(self.expression, n, self.set_length)
+                raise ValueError(msg)
+            self.neq_length.add(n)
+            self.assumptions.append(_Assumption(
+                self._init_ref, value, "!=", fun="len"))
+        else:
+            raise ValueError(self._UNK_ATTR.format(attr))
 
-    def gt(self, value):
-        raise InvalidFieldOperatorError(">")
+    def lt(self, value, attr=None):
+        if attr not in self._ATTRS:
+            raise InvalidFieldOperatorError("<")
+        if attr == "length":
+            assert isinstance(value, _LiteralWrapper)
+            n = value.value
+            if n == 0:
+                msg = "cannot set {} length to <0".format(self.expression)
+                raise ValueError(msg)
+            if self.min_length is not None and self.min_length >= n:
+                msg = "cannot set {} length to <{} and >={}"
+                msg = msg.format(self.expression, n, self.min_length)
+                raise ValueError(msg)
+            if self.max_length is None or self.max_length >= n:
+                self.max_length = n - 1
+                self.assumptions.append(_Assumption(
+                    self._init_ref, value, "<", fun="len"))
+        else:
+            raise ValueError(self._UNK_ATTR.format(attr))
 
-    def gte(self, value):
-        raise InvalidFieldOperatorError(">=")
+    def lte(self, value, attr=None):
+        if attr not in self._ATTRS:
+            raise InvalidFieldOperatorError("<=")
+        if attr == "length":
+            assert isinstance(value, _LiteralWrapper)
+            n = value.value
+            if self.min_length is not None and self.min_length > n:
+                msg = "cannot set {} length to <={} and >={}"
+                msg = msg.format(self.expression, n, self.min_length)
+                raise ValueError(msg)
+            if self.max_length is None or self.max_length > n:
+                self.max_length = n
+                self.assumptions.append(_Assumption(
+                    self._init_ref, value, "<=", fun="len"))
+        else:
+            raise ValueError(self._UNK_ATTR.format(attr))
+
+    def gt(self, value, attr=None):
+        if attr not in self._ATTRS:
+            raise InvalidFieldOperatorError(">")
+        if attr == "length":
+            assert isinstance(value, _LiteralWrapper)
+            n = value.value
+            if self.max_length is not None and self.max_length <= n:
+                msg = "cannot set {} length to >{} and <={}"
+                msg = msg.format(self.expression, n, self.max_length)
+                raise ValueError(msg)
+            if self.min_length is None or self.min_length <= n:
+                self.min_length = n + 1
+                self.assumptions.append(_Assumption(
+                    self._init_ref, value, ">", fun="len"))
+        else:
+            raise ValueError(self._UNK_ATTR.format(attr))
+
+    def gte(self, value, attr=None):
+        if attr not in self._ATTRS:
+            raise InvalidFieldOperatorError(">=")
+        if attr == "length":
+            assert isinstance(value, _LiteralWrapper)
+            n = value.value
+            if self.max_length is not None and self.max_length < n:
+                msg = "cannot set {} length to >={} and <={}"
+                msg = msg.format(self.expression, n, self.max_length)
+                raise ValueError(msg)
+            if self.min_length is None or self.min_length < n:
+                self.min_length = n
+                self.assumptions.append(_Assumption(
+                    self._init_ref, value, ">=", fun="len"))
+        else:
+            raise ValueError(self._UNK_ATTR.format(attr))
 
     def _get_multifield(self, accessor):
         # NOTE: This assumes that all static generators are already present.
@@ -720,7 +865,7 @@ class RangeGeneratorView(FieldGenerator):
             str(self.field), ", ".join(str(i) for i in self.array.fields))
 
     def _template(self):
-        fields = ", ".join(field._template for field in self.fields)
+        fields = ", ".join(field._template() for field in self.fields)
         if self.reducer is not None:
             return "{}({})".format(self.reducer, fields)
         return "({},)".format(fields)
@@ -981,19 +1126,20 @@ class _DefaultStrategy(_Strategy):
         return True
 
     def build(self):
-        if self.field.field.ros_type.is_array:
-            if self.field.field.ros_type.is_fixed_length:
+        field = self.field.field
+        if field.ros_type.is_array:
+            if field.ros_type.is_fixed_length:
                 value = "[{}]".format(", ".join(
-                    None for i in range(self.field.field.ros_type.length)))
+                    None for i in range(field.ros_type.length)))
             else:
-                value = RandomArray(self.field.field.min_length)
+                value = RandomArray(field.min_length, field.max_length,
+                                    field.set_length)
         else:
-            if self.field.field.ros_type.is_primitive:
+            if field.ros_type.is_primitive:
                 value = RandomValue(self.field.type_name)
             else:
-                value = RandomValue(self.field.type_name,
-                    msg=self.field.field.expression)
-        statement = Assignment(self.field.field.expression, value)
+                value = RandomValue(self.field.type_name, msg=field.expression)
+        statement = Assignment(field.expression, value)
         return self._enclosing_loops(statement)
 
     def _template(self):
@@ -1175,20 +1321,24 @@ class _SampledFrom(_Strategy):
 ################################################################################
 
 class _Assumption(_Statement):
-    __slots__ = _Statement.__slots__ + ("value", "operator")
+    __slots__ = _Statement.__slots__ + ("value", "operator", "function")
 
-    def __init__(self, field, value, operator):
+    def __init__(self, field, value, operator, fun=None):
         _Statement.__init__(self, field)
         self.value = value
         self.operator = operator
+        self.function = fun
 
     def available(self, build_number):
         return (_Statement.available(self, build_number)
                 and self.value.available(build_number))
 
     def build(self):
-        condition = FieldCondition(self.field.field.expression, self.operator,
-                                   str(self.value))
+        if self.function:
+            expr = "{}({})".format(self.function, self.field.field.expression)
+        else:
+            expr = self.field.field.expression
+        condition = FieldCondition(expr, self.operator, str(self.value))
         statement = Assumption([condition])
         return self._enclosing_loops(statement)
 

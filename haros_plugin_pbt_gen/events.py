@@ -28,7 +28,7 @@ from builtins import range # Python 2 and 3: forward-compatible
 
 from haros.hpl.hpl_ast import (
     HplEvent, HplEventChain, HplChainDisjunction, HplFieldCondition,
-    HplFieldReference, HplValue, HplSet, HplRange
+    HplFieldReference, HplValue, HplSet, HplRange, HplLiteral
 )
 
 
@@ -65,8 +65,10 @@ class EventTemplate(object):
         self.delay = event.delay # float
         self.duration = event.duration # float
         self.conditions = list(event.msg_filter.conditions)
+        # ^ [HplFieldCondition]
         self.dep_conditions = {} # {tuple(event key): [HplFieldCondition]}
-        self.length_conditions = [] # [(string (array), int (min. length))]
+        self.length_conditions = list(event.msg_filter.length_conditions)
+        # ^ [HplFieldCondition]
         self.ref_count = 0 # int    references to this event
         self.forks = [] # [EventTemplate]
         self.dependencies = [] # [EventTemplate]
@@ -102,6 +104,10 @@ class EventTemplate(object):
     def var_count(self):
         return len(self.saved_vars)
 
+    @property
+    def has_conditions(self):
+        return bool(self.conditions or self.length_conditions)
+
     def key(self):
         return self.uid[:-1]
 
@@ -122,8 +128,11 @@ class EventTemplate(object):
     def get_dep_conditions(self, key):
         return self.dep_conditions.get(key, [])
 
-    def add_length_condition(self, field_token, min_length):
-        self.length_conditions.append((field_token, min_length))
+    def add_min_length_condition(self, field_token, min_length):
+        field_ref = HplFieldReference(field_token)
+        hpl_value = HplLiteral(str(min_length), min_length)
+        c = HplFieldCondition(field_ref, ">=", hpl_value)
+        self.length_conditions.append(c)
 
     def _set_class_name(self):
         parts = [str(i) for i in self.uid]

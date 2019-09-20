@@ -91,7 +91,7 @@ e.state[{{ value }}]
 {%- endfor %}
 {%- endmacro %}
 
-{% macro _field_condition(condition) -%}
+{% macro _field_condition(condition, fun=none) -%}
 {% if condition.field.is_multi_field -%}
     {% set ns = namespace(py = [], root = 'msg') %}
     {% set _f_loops, _rem_expr = condition.field.loops() %}
@@ -109,6 +109,9 @@ all({{ _field_clause(ref, condition.operator, condition.value) }} {# -#}
     {{ ns.py|join(' ') }})
 {%- else -%}
     {% set ref = 'msg.' ~ condition.field -%}
+    {% if fun -%}
+        {%- set ref = fun ~ '(' ~ ref ~ ')' -%}
+    {%- endif -%}
     {{ _field_clause(ref, condition.operator, condition.value) }}
 {%- endif %}
 {%- endmacro %}
@@ -120,8 +123,8 @@ all({{ _field_clause(ref, condition.operator, condition.value) }} {# -#}
 {% endmacro %}
 
 {% macro _length_conditions(event) %}
-{% for array, min_length in event.length_conditions %} and {# -#}
-len(msg.{{ array }}) >= {{ min_length }}{# -#}
+{% for condition in event.length_conditions %} and {# -#}
+{{ _field_condition(condition, fun='len') }}{# -#}
 {% endfor %}
 {% endmacro %}
 

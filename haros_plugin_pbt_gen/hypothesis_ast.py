@@ -177,14 +177,19 @@ class Expression(object):
 
 
 class RandomArray(Expression):
-    __slots__ = Expression.__slots__ + ("min_size",)
+    __slots__ = Expression.__slots__ + ("min_size", "max_size")
 
-    def __init__(self, min_size):
-        self.min_size = min_size
+    def __init__(self, min_size, max_size, set_size):
+        if set_size is not None:
+            self.min_size = set_size
+            self.max_size = set_size
+        else:
+            self.min_size = min_size
+            self.max_size = max_size
 
     def __str__(self):
-        return "draw(strategies.lists(strategies.none(), min_size={}))".format(
-            self.min_size)
+        args = "min_size={}, max_size={}".format(self.min_size, self.max_size)
+        return "draw(strategies.lists(strategies.none(), {}))".format(args)
 
 
 class RandomValue(Expression):

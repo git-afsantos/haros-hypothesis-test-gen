@@ -27,6 +27,7 @@
 
 from builtins import range # Python 2 and 3: forward-compatible
 from collections import namedtuple
+from itertools import chain as iterchain
 import os
 
 from haros.hpl.hpl_ast import HplAstObject
@@ -232,15 +233,17 @@ class TestGenerator(object):
             base_type = self.pubbed_topics.get(topic)
             if base_type is None:
                 try:
-                    base_type = self.subbed_topics[event.topic]
+                    base_type = self.subbed_topics[topic]
                 except KeyError:
                     raise SpecError(self.NO_SUB.format(
-                        self.config.name, event.topic))
+                        self.config.name, topic))
             self._type_check_msg_filter(msg_filter, base_type)
 
     NO_FIELD = "Message type '{}' does not contain field '{}'"
 
     NAN = "Expected a number, but found {} ({})"
+
+    NOT_LIST = "Expected a var-length array, but found {} ({})"
 
     def _type_check_msg_filter(self, msg_filter, base_type):
         for condition in msg_filter.conditions:
@@ -254,6 +257,16 @@ class TestGenerator(object):
                     raise SpecError(self.NAN.format(
                         condition.field.token, base_type.type_name))
             # TODO check that values fit within types
+        for condition in msg_filter.length_conditions:
+            try:
+                selector = Selector(condition.field.token, base_type)
+            except KeyError:
+                raise SpecError(self.NO_FIELD.format(
+                    base_type.type_name, condition.field.token))
+            if not (selector.ros_type.is_array
+                    and not selector.ros_type.is_fixed_length):
+                raise SpecError(self.NOT_LIST.format(
+                    condition.field.token, base_type.type_name))
 
     def _get_publishers(self, terminator):
         avoid = set()
@@ -285,7 +298,7 @@ class TestGenerator(object):
             for field_token in event.saved_vars.values():
                 self._length_for_field(field_token, type_token, lengths)
             for token, min_length in lengths.items():
-                event.add_length_condition(token, min_length)
+                event.add_min_length_condition(token, min_length)
 
     def _length_for_field(self, field_token, type_token, lengths):
         selector = Selector(field_token, type_token)
@@ -411,7 +424,7 @@ class CustomStrategyBuilder(object):
                     event.topic, publishers)
                 pub = publishers[event.topic]
                 self.pkg_imports.add(pub.type_token.package)
-                if event.conditions:
+                if event.has_conditions:
                     self.strategies.append(self._event(event, pub))
                 elif pub.strategies:
                     event.strategy = pub.strategies[-1]
@@ -422,12 +435,12 @@ class CustomStrategyBuilder(object):
                 # make sure the roots do not happen; prevent the chain
                 # TODO chain can theoretically be prevented at any point
                 for event in trigger.roots:
-                    if (event.topic in publishers and not event.conditions
+                    if (event.topic in publishers and not event.has_conditions
                             and not event.ref_count):
                         # negation of any msg is no msg at all
                         del publishers[event.topic]
                 for event in trigger.roots:
-                    if event.topic in publishers and event.conditions:
+                    if event.topic in publishers and event.has_conditions:
                         pub = publishers[event.topic]
                         self.pkg_imports.add(pub.type_token.package)
                         strat = self._event(event, pub, negate=True)
@@ -440,7 +453,7 @@ class CustomStrategyBuilder(object):
                         event.topic, publishers)
                     pub = publishers[event.topic]
                     self.pkg_imports.add(pub.type_token.package)
-                    if event.conditions:
+                    if event.has_conditions:
                         self.strategies.append(self._event(event, pub))
                     elif pub.strategies:
                         event.strategy = pub.strategies[-1]
@@ -449,7 +462,8 @@ class CustomStrategyBuilder(object):
     def _publisher(self, publisher, msg_filter):
         type_token = publisher.type_token
         self.types_by_message[None] = type_token
-        strategy = self._strategy(type_token, msg_filter.conditions)
+        strategy = self._strategy(type_token, msg_filter.conditions,
+                                  msg_filter.length_conditions)
         publisher.strategies.append(strategy)
         return strategy
 
@@ -462,59 +476,101 @@ class CustomStrategyBuilder(object):
             # TODO improve this, not all must be negated at once;
             #   it should loop and negate one condition at a time.
             conditions = [c.negation() for c in event.conditions]
+            len_conds = [c.negation() for c in event.length_conditions]
         else:
             conditions = event.conditions
-        strategy = self._strategy(type_token, conditions)
+            len_conds = event.length_conditions
+        strategy = self._strategy(type_token, conditions, len_conds)
         event.strategy = strategy
         return strategy
 
-    def _strategy(self, type_token, conditions):
-        strategy = self._msg_generator(type_token, conditions)
+    def _strategy(self, type_token, conditions, len_conditions):
+        strategy = self._msg_generator(type_token, conditions, len_conditions)
         i = len(self.strategies) + 1
         name = "cms{}_{}_{}".format(i, type_token.package, type_token.message)
         return CustomMsgStrategy(name, strategy.args, type_token.package,
                                  type_token.message, strategy.build())
 
-    def _msg_generator(self, type_token, conditions):
+    def _msg_generator(self, type_token, conditions, len_conditions):
         strategy = MessageStrategyGenerator(type_token)
-        for condition in conditions:
+        for condition in iterchain(conditions, len_conditions):
             selector = Selector(condition.field.token, type_token)
             strategy.ensure_generator(selector)
         for condition in conditions:
-            selector = Selector(condition.field.token, type_token)
-            value = self._value(condition.value, strategy)
-            if condition.is_eq:
-                strategy.set_eq(selector, value)
-            elif condition.is_neq:
-                strategy.set_neq(selector, value)
-            elif condition.is_lt:
-                strategy.set_lt(selector, value)
-            elif condition.is_lte:
-                strategy.set_lte(selector, value)
-            elif condition.is_gt:
-                strategy.set_gt(selector, value)
-            elif condition.is_gte:
-                strategy.set_gte(selector, value)
-            elif condition.is_in:
-                if condition.value.is_range:
-                    if condition.value.exclude_lower:
-                        strategy.set_gt(selector, value[0])
-                    else:
-                        strategy.set_gte(selector, value[0])
-                    if condition.value.exclude_upper:
-                        strategy.set_lt(selector, value[1])
-                    else:
-                        strategy.set_lte(selector, value[1])
-                else:
-                    strategy.set_in(selector, value)
-            elif condition.is_not_in:
-                if condition.value.is_range:
-                    strategy.set_not_in_range(selector, value[0], value[1],
-                        exclude_min=condition.value.exclude_lower,
-                        exclude_max=condition.value.exclude_upper)
-                else:
-                    strategy.set_not_in(selector, value)
+            self._set_condition(strategy, condition, type_token)
+        for condition in len_conditions:
+            self._set_len_condition(strategy, condition, type_token)
         return strategy
+
+    def _set_condition(self, strategy, condition, type_token):
+        selector = Selector(condition.field.token, type_token)
+        value = self._value(condition.value, strategy)
+        if condition.is_eq:
+            strategy.set_eq(selector, value)
+        elif condition.is_neq:
+            strategy.set_neq(selector, value)
+        elif condition.is_lt:
+            strategy.set_lt(selector, value)
+        elif condition.is_lte:
+            strategy.set_lte(selector, value)
+        elif condition.is_gt:
+            strategy.set_gt(selector, value)
+        elif condition.is_gte:
+            strategy.set_gte(selector, value)
+        elif condition.is_in:
+            if condition.value.is_range:
+                if condition.value.exclude_lower:
+                    strategy.set_gt(selector, value[0])
+                else:
+                    strategy.set_gte(selector, value[0])
+                if condition.value.exclude_upper:
+                    strategy.set_lt(selector, value[1])
+                else:
+                    strategy.set_lte(selector, value[1])
+            else:
+                strategy.set_in(selector, value)
+        elif condition.is_not_in:
+            if condition.value.is_range:
+                strategy.set_not_in_range(selector, value[0], value[1],
+                    exclude_min=condition.value.exclude_lower,
+                    exclude_max=condition.value.exclude_upper)
+            else:
+                strategy.set_not_in(selector, value)
+
+    def _set_len_condition(self, strategy, condition, type_token):
+        selector = Selector(condition.field.token, type_token)
+        value = self._value(condition.value, strategy)
+        if condition.is_eq:
+            strategy.set_attr_eq(selector, value, "length")
+        elif condition.is_neq:
+            strategy.set_attr_neq(selector, value, "length")
+        elif condition.is_lt:
+            strategy.set_attr_lt(selector, value, "length")
+        elif condition.is_lte:
+            strategy.set_attr_lte(selector, value, "length")
+        elif condition.is_gt:
+            strategy.set_attr_gt(selector, value, "length")
+        elif condition.is_gte:
+            strategy.set_attr_gte(selector, value, "length")
+        elif condition.is_in:
+            if condition.value.is_range:
+                if condition.value.exclude_lower:
+                    strategy.set_attr_gt(selector, value[0], "length")
+                else:
+                    strategy.set_attr_gte(selector, value[0], "length")
+                if condition.value.exclude_upper:
+                    strategy.set_attr_lt(selector, value[1], "length")
+                else:
+                    strategy.set_attr_lte(selector, value[1], "length")
+            else:
+                strategy.set_attr_in(selector, value, "length")
+        elif condition.is_not_in:
+            if condition.value.is_range:
+                strategy.set_attr_not_in_range(selector, value[0], value[1],
+                    "length", exclude_min=condition.value.exclude_lower,
+                    exclude_max=condition.value.exclude_upper)
+            else:
+                strategy.set_attr_not_in(selector, value, "length")
 
     def _value(self, hpl_value, strategy):
         if hpl_value.is_reference:
