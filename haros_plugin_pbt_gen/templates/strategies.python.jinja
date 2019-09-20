@@ -154,7 +154,7 @@ def _setup_sut(self):
     launch.start()
     process, success = launch.runner.launch_node(node)
     if not success:
-        raise RuntimeException("failed to launch {{ cmd.args[0] }}/{# -#}
+        raise RuntimeError("failed to launch {{ cmd.args[0] }}/{# -#}
             {{ cmd.args[1] }}")
     self.launches.append(launch)
         {% endif %}
