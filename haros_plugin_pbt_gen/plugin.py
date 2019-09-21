@@ -125,6 +125,7 @@ class TestGenerator(object):
         for i in range(len(self.properties)):
             p = self.properties[i]
             mon = MonitorTemplate(i, p, self.pubbed_topics, self.subbed_topics)
+            self._inject_assumptions(mon)
             all_monitors.append(mon)
             if mon.is_testable:
                 publishers = self._get_publishers(mon.terminator)
@@ -143,7 +144,6 @@ class TestGenerator(object):
                 msg += mon.hpl_string
                 self.iface.log_warning(msg)
             mon.variable_substitution()
-            self._inject_array_length(mon)
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
@@ -281,22 +281,24 @@ class TestGenerator(object):
                     topic, type_token, rospy_type, [])
         return pubs
 
-    def _inject_array_length(self, monitor):
+    def _inject_assumptions(self, monitor):
+        event_map = {}
         for event in monitor.events:
+            msg_filter = self.assumptions.get(event.topic)
+            if msg_filter is not None:
+                event.conditions.extend(msg_filter.conditions)
+                event.length_conditions.extend(msg_filter.length_conditions)
+            if event.alias:
+                event_map[event.alias] = event
             lengths = {}
-            try:
-                type_token = self.pubbed_topics[event.topic]
-            except KeyError:
-                try:
-                    type_token = self.subbed_topics[event.topic]
-                except KeyError:
-                    raise SpecError("Unknown topic: '{}'".format(event.topic))
             for condition in event.conditions:
                 self._length_for_field(condition.field.token,
-                    type_token, lengths)
-                self._length_for_value(condition.value, type_token, lengths)
+                    event.type_token, lengths)
+                self._length_for_value(condition.value, event.type_token,
+                    lengths, event_map)
+            # v -- NOTE saved_vars is probably not yet assigned
             for field_token in event.saved_vars.values():
-                self._length_for_field(field_token, type_token, lengths)
+                self._length_for_field(field_token, event.type_token, lengths)
             for token, min_length in lengths.items():
                 event.add_min_length_condition(token, min_length)
 
@@ -318,21 +320,23 @@ class TestGenerator(object):
                         lengths[array_expr] = min_len
                 array_expr = None
 
-    def _length_for_value(self, hpl_value, type_token, lengths):
+    def _length_for_value(self, hpl_value, type_token, lengths, event_map):
         if hpl_value.is_literal:
             return
         if hpl_value.is_reference:
             if hpl_value.message is not None:
-                return
+                type_token = event_map[hpl_value.message].type_token
             if hpl_value.token in type_token.constants:
                 return
             self._length_for_field(hpl_value.token, type_token, lengths)
         elif hpl_value.is_range:
-            self._length_for_value(hpl_value.lower_bound, type_token, lengths)
-            self._length_for_value(hpl_value.upper_bound, type_token, lengths)
+            self._length_for_value(hpl_value.lower_bound, type_token,
+                                   lengths, event_map)
+            self._length_for_value(hpl_value.upper_bound, type_token,
+                                   lengths, event_map)
         elif hpl_value.is_set:
             for v in hpl_value.values:
-                self._length_for_value(v, type_token, lengths)
+                self._length_for_value(v, type_token, lengths, event_map)
         elif not hpl_value.is_variable:
             raise TypeError("unknown value type: " + type(hpl_value).__name__)
 
@@ -399,9 +403,9 @@ class CustomStrategyBuilder(object):
         # this is basically just type checking
         # FIXME this is not working yet - cannot deal with aliases
         for event in monitor.events:
-            type_token = get_type(event.msg_type)
             try:
-                strategy = self._msg_generator(type_token, event.conditions)
+                strategy = self._msg_generator(
+                    event.type_token, event.conditions)
                 strategy.build()
             except (KeyError, IndexError) as e:
                 raise SpecError("unable to find field:" + str(e))

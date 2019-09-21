@@ -50,7 +50,7 @@ class EventTemplate(object):
                  "seq_timer", "is_leaf", "external_timer", "is_under_timer",
                  "is_activator", "is_terminator", "is_trigger", "is_behaviour",
                  "dependencies", "dep_conditions", "log_level", "log_gap",
-                 "log_age", "reads_state", "subsumes", "msg_type",
+                 "log_age", "reads_state", "subsumes", "type_token",
                  "length_conditions")
 
     def __init__(self, uid, event):
@@ -60,7 +60,7 @@ class EventTemplate(object):
         self.alias = event.alias # string
         self.event_type = event.event_type # enum
         self.topic = event.topic # string
-        self.msg_type = None # string
+        self.type_token = None # TypeToken
         self.strategy = None # string
         self.delay = event.delay # float
         self.duration = event.duration # float
@@ -108,6 +108,10 @@ class EventTemplate(object):
     def has_conditions(self):
         return bool(self.conditions or self.length_conditions)
 
+    @property
+    def msg_type(self):
+        return self.type_token.type_name
+
     def key(self):
         return self.uid[:-1]
 
@@ -129,6 +133,23 @@ class EventTemplate(object):
         return self.dep_conditions.get(key, [])
 
     def add_min_length_condition(self, field_token, min_length):
+        for condition in self.length_conditions:
+            if condition.field.token != field_token:
+                continue
+            if not condition.value.is_literal:
+                continue
+            if condition.operator != ">" and condition.operator != ">=":
+                continue
+            if condition.value.value >= min_length:
+                return
+            if condition.operator == ">":
+                hpl_value = HplLiteral(str(min_length - 1), min_length - 1)
+                condition.value = hpl_value
+            else:
+                assert condition.operator == ">="
+                hpl_value = HplLiteral(str(min_length), min_length)
+                condition.value = hpl_value
+            return
         field_ref = HplFieldReference(field_token)
         hpl_value = HplLiteral(str(min_length), min_length)
         c = HplFieldCondition(field_ref, ">=", hpl_value)
@@ -504,11 +525,11 @@ class MonitorTemplate(object):
     def _annotate_events(self, pubbed_topics, subbed_topics):
         for event in self.events:
             if event.topic in pubbed_topics:
-                event.msg_type = pubbed_topics[event.topic].type_name
+                event.type_token = pubbed_topics[event.topic]
             else:
                 assert event.topic in subbed_topics
                 event.is_external = True
-                event.msg_type = subbed_topics[event.topic].type_name
+                event.type_token = subbed_topics[event.topic]
 
     def _make_subs(self, prop, pubbed_topics, subbed_topics):
         subs = {}
