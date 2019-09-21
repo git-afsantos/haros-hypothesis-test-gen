@@ -563,7 +563,7 @@ def _deactivate(self, time):
 class {{ monitor.class_name }}(PropertyMonitor):
     {{ _monitor_slots(monitor) }}
 
-    HPL_PROPERTY = """{{ monitor.hpl_string }}"""
+    HPL_PROPERTY = r"""{{ monitor.hpl_string }}"""
 
     def __init__(self, subs, success_action=None, failure_action=None):
         PropertyMonitor.__init__(self, success_action=success_action,
