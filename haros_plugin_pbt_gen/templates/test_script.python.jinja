@@ -110,6 +110,7 @@ from collections import namedtuple
 from threading import Lock
 from time import time as get_time
 import unittest
+import sys
 
 from hypothesis import assume, given, note, settings
 import hypothesis.strategies as strategies
@@ -487,6 +488,7 @@ def main():
     # {{ property_text }}
     rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
     unittest.main(module=__name__, argv=[__name__], exit=False)
+    sys.stdout.flush()
 
 if __name__ == "__main__":
     main()
