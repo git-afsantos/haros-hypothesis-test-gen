@@ -68,13 +68,25 @@ def configuration_analysis(iface, config):
     assumptions = [p for p in config.hpl_assumptions
                      if isinstance(p, HplAstObject)]
     settings = config.user_attributes.get(KEY, EMPTY_DICT)
+    _validate_settings(iface, settings)
     try:
         global config_num
         config_num += 1
         gen = TestGenerator(iface, config, properties, assumptions, settings)
-        gen.make_tests()
+        gen.make_tests(config_num)
     except SpecError as e:
         iface.log_error(e.message)
+
+
+def _validate_settings(iface, settings):
+    # TODO fill in the rest
+    msg = "invalid setting for '{}': {}; expected one of {}; assuming {}"
+    val = settings.get("extra_monitors")
+    exp = (None, True, False, "safety")
+    default = True
+    if val not in exp:
+        iface.log_warning(msg.format(val, exp, default))
+        settings["extra_monitors"] = default
 
 
 ################################################################################
@@ -119,35 +131,13 @@ class TestGenerator(object):
             self.pkg_imports.add(type_token.package)
         self.default_strategies = self._get_default_strategies()
 
-    def make_tests(self):
-        all_monitors = []
-        tests = []
-        for i in range(len(self.properties)):
-            p = self.properties[i]
-            mon = MonitorTemplate(i, p, self.pubbed_topics, self.subbed_topics)
-            self._inject_assumptions(mon)
-            all_monitors.append(mon)
-            if mon.is_testable:
-                publishers = self._get_publishers(mon.terminator)
-                # custom.make_strategies() may change publishers
-                custom = CustomStrategyBuilder()
-                custom.make_strategies(mon, publishers, self.assumptions)
-                custom.pkg_imports.update(self.pkg_imports)
-                publishers = list(publishers.values())
-                self._apply_slack(mon)
-                tests.append(TestTemplate(
-                    mon, custom.strategies, publishers, self.subscribers,
-                    custom.pkg_imports, mon.hpl_string))
-            else:
-                msg = ("Cannot produce a test script for the "
-                       "following property: ")
-                msg += mon.hpl_string
-                self.iface.log_warning(msg)
-            mon.variable_substitution()
+    def make_tests(self, config_num):
+        monitors, tests = self._make_monitors_and_tests()
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
-            self._write_test_files(tests[i], all_monitors, filename)
+            test_monitors = self._get_test_monitors(testable, monitors)
+            self._write_test_files(tests[i], test_monitors, filename)
         if not tests:
             msg = "None of the given properties for {} is directly testable."
             msg = msg.format(self.config.name)
@@ -267,6 +257,49 @@ class TestGenerator(object):
                     and not selector.ros_type.is_fixed_length):
                 raise SpecError(self.NOT_LIST.format(
                     condition.field.token, base_type.type_name))
+
+    def _make_monitors_and_tests(self):
+        all_monitors = []
+        tests = []
+        for i in range(len(self.properties)):
+            p = self.properties[i]
+            uid = "P" + str(i + 1)
+            monitor = MonitorTemplate(
+                uid, p, self.pubbed_topics, self.subbed_topics)
+            self._inject_assumptions(monitor)
+            all_monitors.append(monitor)
+            if monitor.is_testable:
+                publishers = self._get_publishers(monitor.terminator)
+                custom = CustomStrategyBuilder()
+                custom.make_strategies(monitor, publishers, self.assumptions)
+                # ^ custom.make_strategies() may change publishers
+                custom.pkg_imports.update(self.pkg_imports)
+                publishers = list(publishers.values())
+                self._apply_slack(monitor)
+                tests.append(TestTemplate(
+                    monitor, custom.strategies, publishers, self.subscribers,
+                    custom.pkg_imports, monitor.hpl_string))
+            else:
+                msg = ("Cannot produce a test script for the "
+                       "following property: ")
+                msg += monitor.hpl_string
+                self.iface.log_warning(msg)
+            monitor.variable_substitution()
+        return all_monitors, tests
+
+    def _get_test_monitors(self, test_case, monitors):
+        extras = self.settings.get("extra_monitors", True)
+        if extras is True:
+            return monitors
+        if extras is False:
+            return (test_case.monitor,)
+        if extras == "safety":
+            ms = [m for m in monitors if m.is_safety]
+            if test_case.monitor not in ms:
+                ms.append(test_case.monitor)
+            return ms
+        # any other value is invalid; assume default behaviour
+        return monitors
 
     def _get_publishers(self, terminator):
         avoid = set()

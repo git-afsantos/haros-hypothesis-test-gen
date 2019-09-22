@@ -351,10 +351,10 @@ class TestTracer(unittest.TestCase):
         self.launch_time = 0
         self.deadline = 0
         self.monitors = []
-        {% for monitor in monitors|sort(attribute='index') %}
+        {% for monitor in monitors %}
         self.monitors.append({{ monitor.class_name }}(self.subs))
         {% endfor %}
-        self.main_monitor = self.monitors[{{ main_monitor.index }}]
+        self.main_monitor = self.monitors[{{ monitors.index(main_monitor) }}]
         self.launches = []
         self.trace_done = False
 

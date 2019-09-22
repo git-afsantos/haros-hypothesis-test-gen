@@ -226,13 +226,16 @@ class MonitorTemplate(object):
                  "events", "subs", "aliases", "activator", "terminator",
                  "trigger", "behaviour", "scope_timeout", "hpl_string")
 
-    def __init__(self, index, hpl_property, pubbed_topics, subbed_topics):
+    _n = 0
+
+    def __init__(self, uid, hpl_property, pubbed_topics, subbed_topics):
         # hpl_property :: HplProperty
         # pubbed_topics :: {string (topic): TypeToken}
         # subbed_topics :: {string (topic): TypeToken}
-        self.index = index
-        self.uid = "P" + str(index + 1) # string
-        self.class_name = self.uid + "Monitor" # string
+        MonitorTemplate._n += 1
+        self.index = str(MonitorTemplate._n) # string
+        self.uid = uid # string
+        self.class_name = "Monitor" + self.index # string
         self.is_liveness = hpl_property.is_liveness # bool
         self.is_safety = hpl_property.is_safety # bool
         self.events = [] # [EventTemplate]
@@ -312,7 +315,7 @@ class MonitorTemplate(object):
 
     def _set_activator(self, top_level_event):
         self.activator = CompositeEventTemplate((self.uid, 1), top_level_event)
-        var_name = "".join(("_p", str(self.index + 1), "e"))
+        var_name = "".join(("_p", self.index, "e"))
         for event in self.activator.events:
             self.events.append(event)
             event.is_activator = True
@@ -323,7 +326,7 @@ class MonitorTemplate(object):
 
     def _set_trigger(self, top_level_event):
         self.trigger = CompositeEventTemplate((self.uid, 2), top_level_event)
-        var_name = "".join(("_p", str(self.index + 1), "e"))
+        var_name = "".join(("_p", self.index, "e"))
         for event in self.trigger.events:
             self.events.append(event)
             event.is_trigger = True
@@ -334,7 +337,7 @@ class MonitorTemplate(object):
 
     def _set_behaviour(self, top_level_event, req=False):
         self.behaviour = CompositeEventTemplate((self.uid, 3), top_level_event)
-        var_name = "".join(("_p", str(self.index + 1), "e"))
+        var_name = "".join(("_p", self.index, "e"))
         for event in self.behaviour.events:
             self.events.append(event)
             event.is_behaviour = True
@@ -347,7 +350,7 @@ class MonitorTemplate(object):
 
     def _set_terminator(self, top_level_event):
         self.terminator = CompositeEventTemplate((self.uid, 4), top_level_event)
-        var_name = "".join(("_p", str(self.index + 1), "e"))
+        var_name = "".join(("_p", self.index, "e"))
         for event in self.terminator.events:
             self.events.append(event)
             event.is_terminator = True
