@@ -205,7 +205,7 @@ class TestGenerator(object):
             queue = new_queue
         return tuple(strategies.values())
 
-    NO_SUB = "Configuration '{}' does not subscribe topic '{}'"
+    NO_TOPIC = "Configuration '{}' does not publish or subscribe topic '{}'"
 
     def _type_check_topics(self):
         for prop in self.properties:
@@ -216,7 +216,7 @@ class TestGenerator(object):
                         try:
                             base_type = self.subbed_topics[event.topic]
                         except KeyError:
-                            raise SpecError(self.NO_SUB.format(
+                            raise SpecError(self.NO_TOPIC.format(
                                 self.config.name, event.topic))
                     self._type_check_msg_filter(event.msg_filter, base_type)
         for topic, msg_filter in self.assumptions.items():
@@ -225,7 +225,7 @@ class TestGenerator(object):
                 try:
                     base_type = self.subbed_topics[topic]
                 except KeyError:
-                    raise SpecError(self.NO_SUB.format(
+                    raise SpecError(self.NO_TOPIC.format(
                         self.config.name, topic))
             self._type_check_msg_filter(msg_filter, base_type)
 
