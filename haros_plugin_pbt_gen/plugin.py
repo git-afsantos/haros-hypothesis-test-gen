@@ -457,8 +457,8 @@ class CustomStrategyBuilder(object):
         if monitor.activator is not None:
             # the whole chain must happen
             for event in monitor.activator.events:
-                assert event.topic in publishers, "{} not in {}".format(
-                    event.topic, publishers)
+                assert event.topic in publishers, "{} not in {}; «{}»".format(
+                    event.topic, tuple(publishers), monitor.hpl_string)
                 pub = publishers[event.topic]
                 self.pkg_imports.add(pub.type_token.package)
                 if event.has_conditions:
