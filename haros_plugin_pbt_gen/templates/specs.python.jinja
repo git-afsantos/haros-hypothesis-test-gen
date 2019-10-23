@@ -19,11 +19,7 @@
 
 {% macro _rhs_value(value) %}
 {% if value.is_literal -%}
-    {% if value.value is string -%}
-        "{{ value.value }}"
-    {%- else -%}
-        {{ value.value }}
-    {%- endif %}
+    {{ value.value }}
 {%- elif value.is_reference -%}
 msg.{{ value }}
 {%- elif value.is_variable -%}
