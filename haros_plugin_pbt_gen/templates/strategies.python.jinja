@@ -16,7 +16,7 @@ ros_{{ pkg }}_{{ msg }}
     field is of a primitive type, otherwise initialises the field in-place,
     since building a ROS message already initialises all field trees below. #}
 {% macro _init_simple_field(name, type_token) %}
-{% if type_token.is_primitive %}
+{% if type_token.is_primitive or type_token.is_time or type_token.is_duration %}
 msg.{{ name }} = draw({{ _type_to_strategy(type_token.type_name) }}()){# -#}
 {% else %}{# modify in-place, ignore return value #}
 draw({{ _type_to_strategy(type_token.type_name) }}(msg=msg.{{ name }})){# -#}
