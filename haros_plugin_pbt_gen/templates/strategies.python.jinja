@@ -377,7 +377,8 @@ class TestTracer(unittest.TestCase):
         for monitor in self.monitors:
             monitor.update(now)
             assert not monitor.has_failed, monitor.HPL_PROPERTY
-        assert self.main_monitor.active or self.trace_done, "invalid test"
+        # FIXME this assertion is not correct
+        # assert self.main_monitor.active or self.trace_done, "invalid test"
         {% if not main_monitor.has_scope_timeout %}
         if now > self.deadline:
             {# assert self.main_monitor.active #}
