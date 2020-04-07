@@ -255,7 +255,8 @@ def traces(draw):
 {% macro test_trace(main_monitor, monitors, pubs, subs, commands, nodes, settings) %}
 class TestTracer(unittest.TestCase):
     __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
-                 "launches", "trace_done", "trace_start_time", "msg_log")
+                 "launches", "trace_done", "trace_start_time", "msg_log",
+                 "n_examples", "n_fail", "times")
 
     NODES = {{ nodes }}
 
@@ -283,6 +284,9 @@ class TestTracer(unittest.TestCase):
         self.pubs["{{ pub.topic }}"] = TestPublisher("{{ pub.topic }}", {# -#}
             {{ pub.rospy_type }}, self.subs["{{ pub.topic }}"])
         {% endfor %}
+        self.n_examples = 0
+        self.n_fail = 0
+        self.times = []
 
     def tearDown(self):
         unittest.TestCase.tearDown(self)
@@ -299,12 +303,25 @@ class TestTracer(unittest.TestCase):
             self._setup_sut()
         finally:
             self._teardown_sut()
-        self._test_hypothesis_properties()
+        try:
+            self.n_examples = 0
+            self.n_fail = 0
+            self._test_hypothesis_properties()
+        finally:
+            if self.times:
+                s = sum(self.times)
+                avg = s / len(self.times)
+                print "Avg. test time:", avg
+                print "Total time:", s
+            print "Number of examples: {} ({} failures)".format(
+                self.n_examples, self.n_fail)
 
     @settings(max_examples={{ settings['max_examples']|d(1000, true) }}, {# -#}
                 deadline=None)
     @given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
     def _test_hypothesis_properties(self, trace, hz):
+        passed = False
+        self.n_examples += 1
         self._setup_test()
         self._setup_sut()
         self.trace_done = False
@@ -339,10 +356,16 @@ class TestTracer(unittest.TestCase):
                 {% endif %}
             assert self.main_monitor.at_least_once
             {% endif %}
+            passed = True
+            print "[Example #{}]: OK".format(self.n_examples)
         {#except AssertionError as e:
         #    self._report_trace(trace, hz)
         #    raise e #}
         finally:
+            self.times.append(get_time() - self.launch_time)
+            if not passed:
+                self.n_fail += 1
+                print "[Example #{}]: FAIL".format(self.n_examples)
             self._report_msg_log()
             self._teardown_sut()
 
