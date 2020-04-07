@@ -40,8 +40,8 @@ e.state[{{ value }}]
             {{ ref }} > {{ _rhs_value(value.lower_bound) }}
         {%- else -%}
             {{ ref }} >= {{ _rhs_value(value.lower_bound) }}
-        {%- endif %} {# -#}
-        and {# -#}
+        {%- endif %}{# -#}
+        {{ ' and ' }}{# -#}
         {% if value.exclude_upper -%}
             {{ ref }} < {{ _rhs_value(value.upper_bound) }}
         {%- else -%}
@@ -59,8 +59,8 @@ e.state[{{ value }}]
             {{ ref }} <= {{ _rhs_value(value.lower_bound) }}
         {%- else -%}
             {{ ref }} < {{ _rhs_value(value.lower_bound) }}
-        {%- endif %} {# -#}
-        or {# -#}
+        {%- endif %}{# -#}
+        {{ ' or ' }}{# -#}
         {% if value.exclude_upper -%}
             {{ ref }} >= {{ _rhs_value(value.upper_bound) }}
         {%- else -%}

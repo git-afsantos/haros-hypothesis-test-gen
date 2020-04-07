@@ -16,7 +16,7 @@ ros_{{ pkg }}_{{ msg }}
     field is of a primitive type, otherwise initialises the field in-place,
     since building a ROS message already initialises all field trees below. #}
 {% macro _init_simple_field(name, type_token) %}
-{% if type_token.is_primitive %}
+{% if type_token.is_primitive or type_token.is_time or type_token.is_duration %}
 msg.{{ name }} = draw({{ _type_to_strategy(type_token.type_name) }}()){# -#}
 {% else %}{# modify in-place, ignore return value #}
 draw({{ _type_to_strategy(type_token.type_name) }}(msg=msg.{{ name }})){# -#}
@@ -400,7 +400,8 @@ class TestTracer(unittest.TestCase):
         for monitor in self.monitors:
             monitor.update(now)
             assert not monitor.has_failed, monitor.HPL_PROPERTY
-        assert self.main_monitor.active or self.trace_done, "invalid test"
+        # FIXME this assertion is not correct
+        # assert self.main_monitor.active or self.trace_done, "invalid test"
         {% if not main_monitor.has_scope_timeout %}
         if now > self.deadline:
             {# assert self.main_monitor.active #}
