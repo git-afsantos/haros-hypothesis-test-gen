@@ -30,8 +30,8 @@ from collections import namedtuple
 from itertools import chain as iterchain
 import os
 
-from haros.hpl.hpl_ast import HplAstObject
-from haros.hpl.ros_types import get_type
+from haros.hpl.hpl_ast import HplVacuousTruth
+from haros.hpl.ros_types import get_type # FIXME
 from jinja2 import Environment, PackageLoader
 
 from .events import MonitorTemplate
@@ -59,20 +59,15 @@ INF = float("inf")
 config_num = 0
 
 def configuration_analysis(iface, config):
-    if not config.launch_commands or not config.nodes.enabled:
+    if (not config.launch_commands or not config.nodes.enabled
+            or not config.hpl_properties:):
         return
-    properties = [p for p in config.hpl_properties
-                    if isinstance(p, HplAstObject)]
-    if not properties:
-        return
-    assumptions = [p for p in config.hpl_assumptions
-                     if isinstance(p, HplAstObject)]
     settings = config.user_attributes.get(KEY, EMPTY_DICT)
     _validate_settings(iface, settings)
     try:
         global config_num
         config_num += 1
-        gen = TestGenerator(iface, config, properties, assumptions, settings)
+        gen = TestGenerator(iface, config, settings)
         gen.make_tests(config_num)
     except SpecError as e:
         iface.log_error(e.message)
@@ -114,17 +109,19 @@ class SpecError(Exception):
 ################################################################################
 
 class TestGenerator(object):
-    def __init__(self, iface, config, properties, assumptions, settings):
+    def __init__(self, iface, config, settings):
         self.iface = iface
         self.config = config
-        self.properties = properties
-        self.assumptions = {p.topic: p.msg_filter for p in assumptions}
+        self.properties = config.hpl_properties
+        self.assumptions = {
+            p.topic: p.predicate for p in config.hpl_assumptions
+            if p.predicate.is_fully_typed()
+        }
         self.settings = settings
         self.commands = config.launch_commands
         self.nodes = list(n.rosname.full for n in config.nodes.enabled)
         self.subbed_topics = self._get_open_subbed_topics()
         self.pubbed_topics = self._get_all_pubbed_topics()
-        self._type_check_topics()
         self.subscribers = self._get_subscribers()
         self.pkg_imports = {"std_msgs"}
         for type_token in self.pubbed_topics.values():
@@ -144,12 +141,13 @@ class TestGenerator(object):
             self.iface.log_warning(msg)
             # TODO generate "empty" monitor, all others become secondary
 
+    # FIXME fetching type tokens should be part of HAROS
     def _get_open_subbed_topics(self):
         ignored = self.settings.get("ignored", ())
-        subbed = {} # topic -> msg_type (TypeToken)
+        subbed = {} # topic -> TypeToken
         for topic in self.config.topics.enabled:
             if topic.subscribers and not topic.publishers:
-                if topic.unresolved:
+                if topic.unresolved or topic.type == "?":
                     msg = "Skipping unresolved topic {} ({}).".format(
                         topic.rosname.full, self.config.name)
                     self.iface.log_warning(msg)
@@ -161,11 +159,12 @@ class TestGenerator(object):
                     subbed[topic.rosname.full] = get_type(topic.type)
         return subbed
 
+    # FIXME fetching type tokens should be part of HAROS
     def _get_all_pubbed_topics(self):
         ignored = self.settings.get("ignored", ())
         pubbed = {} # topic -> msg_type (TypeToken)
         for topic in self.config.topics.enabled:
-            if topic.unresolved:
+            if topic.unresolved or topic.type == "?":
                 msg = "Skipping unresolved topic {} ({}).".format(
                     topic.rosname.full, self.config.name)
                 self.iface.log_warning(msg)
@@ -187,6 +186,45 @@ class TestGenerator(object):
             subs.append(Subscriber(topic, type_token, False))
         return subs
 
+    def _make_strategies(self):
+        """
+        /terminator_topic:
+            vacuous predicate:
+                - avoid publishing on topic
+                - error if activator or 'causes' trigger
+            normal predicate:
+                - negate it and add to assumptions
+        /activator_topic:
+            vacuous predicate:
+                - avoid publishing random msgs on topic *before* the activator
+            normal predicate:
+                - negate it and add to assumptions of random msgs *before*
+        /trigger_topic:
+            precedence:
+                vacuous predicate:
+                    - avoid publishing random msgs *after* the activator
+                normal predicate:
+                    - negate it and add to assumptions of random msgs *after*
+            response:
+                - anything goes, so long as it is not a terminator
+                - no random triggers after *the* trigger
+        /behaviour_topic:
+            - warning in monitors if assumptions are not met?
+        publisher stages:
+            - stage 1: before the activator (if not launch); 0+ chunks
+            - stage 2: entering the scope; 1 chunk
+            - stage 3: within scope, before trigger; 0+ chunks
+            - stage 4: trigger; 1 chunk
+            - stage 5: within scope, after trigger; 0+ chunks
+        """
+
+
+
+
+
+
+
+
     def _get_default_strategies(self):
         queue = list(self.subbed_topics.values())
         strategies = {}
@@ -205,64 +243,16 @@ class TestGenerator(object):
             queue = new_queue
         return tuple(strategies.values())
 
-    NO_TOPIC = "Configuration '{}' does not publish or subscribe topic '{}'"
-
-    def _type_check_topics(self):
-        for prop in self.properties:
-            for event in prop.events():
-                if event.is_publish:
-                    base_type = self.pubbed_topics.get(event.topic)
-                    if base_type is None:
-                        try:
-                            base_type = self.subbed_topics[event.topic]
-                        except KeyError:
-                            raise SpecError(self.NO_TOPIC.format(
-                                self.config.name, event.topic))
-                    self._type_check_msg_filter(event.msg_filter, base_type)
-        for topic, msg_filter in self.assumptions.items():
-            base_type = self.pubbed_topics.get(topic)
-            if base_type is None:
-                try:
-                    base_type = self.subbed_topics[topic]
-                except KeyError:
-                    raise SpecError(self.NO_TOPIC.format(
-                        self.config.name, topic))
-            self._type_check_msg_filter(msg_filter, base_type)
-
-    NO_FIELD = "Message type '{}' does not contain field '{}'"
-
-    NAN = "Expected a number, but found {} ({})"
-
-    NOT_LIST = "Expected a var-length array, but found {} ({})"
-
-    def _type_check_msg_filter(self, msg_filter, base_type):
-        for condition in msg_filter.conditions:
-            try:
-                selector = Selector(condition.field.token, base_type)
-            except KeyError:
-                raise SpecError(self.NO_FIELD.format(
-                    base_type.type_name, condition.field.token))
-            if condition.requires_number:
-                if not selector.ros_type.is_number:
-                    raise SpecError(self.NAN.format(
-                        condition.field.token, base_type.type_name))
-            # TODO check that values fit within types
-        for condition in msg_filter.length_conditions:
-            try:
-                selector = Selector(condition.field.token, base_type)
-            except KeyError:
-                raise SpecError(self.NO_FIELD.format(
-                    base_type.type_name, condition.field.token))
-            if not (selector.ros_type.is_array
-                    and not selector.ros_type.is_fixed_length):
-                raise SpecError(self.NOT_LIST.format(
-                    condition.field.token, base_type.type_name))
+    # TODO check if property AST has deterministic type info
 
     def _make_monitors_and_tests(self):
         all_monitors = []
         tests = []
         for i in range(len(self.properties)):
             p = self.properties[i]
+            if not p.is_fully_typed():
+                self.iface.log_warning(
+                    "Skipping untyped property:\n{}".format(p))
             uid = "P" + str(i + 1)
             monitor = MonitorTemplate(
                 uid, p, self.pubbed_topics, self.subbed_topics)
@@ -304,7 +294,7 @@ class TestGenerator(object):
     def _get_publishers(self, terminator):
         avoid = set()
         if terminator is not None:
-            for event in terminator.roots:
+            for event in terminator.roots: # FIXME
                 avoid.add(event.topic)
         pubs = {}
         for topic, type_token in self.subbed_topics.items():
@@ -314,13 +304,12 @@ class TestGenerator(object):
                     topic, type_token, rospy_type, [])
         return pubs
 
-    def _inject_assumptions(self, monitor):
+    def _inject_assumptions(self, monitor): # FIXME
         event_map = {}
         for event in monitor.events:
-            msg_filter = self.assumptions.get(event.topic)
-            if msg_filter is not None:
-                event.conditions.extend(msg_filter.conditions)
-                event.length_conditions.extend(msg_filter.length_conditions)
+            predicate = self.assumptions.get(event.topic)
+            if predicate is not None:
+                event.conditions.extend(predicate.condition)
             if event.alias:
                 event_map[event.alias] = event
             lengths = {}
@@ -629,3 +618,207 @@ class CustomStrategyBuilder(object):
         if hpl_value.is_set:
             return tuple(self._value(v, strategy) for v in hpl_value.values)
         raise TypeError("unknown value type: " + type(hpl_value).__name__)
+
+
+################################################################################
+# Strategy Building
+################################################################################
+
+# stages: (topic -> strategy (random msg)) x3
+# activator: strategy for the activator event
+# trigger: strategy for the trigger event
+Strategies = namedtuple("Strategies", ("stages", "activator", "trigger"))
+
+
+# publisher stages:
+#   - stage 1 [1+ chunks]: up to activator (if not launch)
+#   - stage 2 [1+ chunks]: up to trigger
+#   - stage 3 [0+ chunks]: after trigger (response and prevention)
+
+# 'globally' and 'until' do not have stage 1
+# only 'causes' and 'forbids' have stage 3
+# only 'causes' and 'forbids' have trigger in stage 2
+
+class StrategyManager(object):
+    __slots__ = ("stage1", "stage2", "stage3")
+
+    def __init__(self, pubs, assumptions):
+        # topic -> (type token, predicate)
+        topics = self._mapping(pubs, assumptions)
+        self.stage1 = Stage1Builder(topics)
+        self.stage2 = Stage2Builder(topics)
+        self.stage3 = Stage3Builder(topics)
+
+    def build_strategies(self, prop):
+        self.stage1.build(prop)
+        self.stage2.build(prop)
+        self.stage3.build(prop)
+        randoms = (self.stage1.strategies, self.stage2.strategies,
+                   self.stage3.strategies)
+        return Strategies(randoms, self.stage1.activator, self.stage2.trigger)
+
+    def _mapping(self, publishers, assumptions):
+        r = {}
+        for event in assumptions:
+            topic = event.topic
+            rostype = self.publishers.get(topic)
+            if rostype is not None:
+                r[topic] = (rostype, event.predicate)
+        for topic, rostype in publishers.items():
+            if topic not in r:
+                r[topic] = (rostype, HplVacuousTruth())
+        return r
+
+
+class StrategyBuilder(object):
+    __slots__ = ()
+
+    def __init__(self):
+
+    def _build(self, rostype, phi):
+        return None
+
+
+class Stage1Builder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + (
+        "topics", "strategies", "activator")
+
+    def __init__(self, topics):
+        super(Stage1Builder, self).__init__()
+        self.topics = topics
+
+    def build(self, prop):
+        self.strategies = {}
+        self.activator = None
+        event = prop.scope.activator
+        if event is None:
+            return # activator is launch; this stage does not exist
+        self._build_activator(event)
+        self._build_randoms(event)
+
+    def _build_activator(self, event):
+        topic = event.topic
+        if topic not in self.topics:
+            raise SpecError("cannot publish on topic '{}'".format(topic))
+        rostype, assumed = self.topics.get(topic)
+        phi = event.predicate.join(assumed)
+        self.activator = self._build(rostype, phi)
+
+    def _build_randoms(self, event):
+        for topic, data in self.topics.items():
+            rostype, assumed = data
+            if topic == event.topic: # activator topic
+                phi = event.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else:
+                    # cannot match activator
+                    phi = phi.negate().join(assumed)
+                    self.strategies[topic] = self._build(rostype, phi)
+            else: # random topic
+                self.strategies[topic] = self._build(rostype, assumed)
+
+
+class Stage2Builder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + (
+        "topics", "strategies", "trigger")
+
+    def __init__(self, topics):
+        super(Stage2Builder, self).__init__()
+        self.topics = topics
+
+    def build(self, prop):
+        self.strategies = {}
+        self.trigger = None
+        trigger = prop.pattern.trigger
+        terminator = prop.scope.terminator
+        if prop.pattern.is_requirement:
+            assert trigger is not None
+            self._build_randoms(trigger, terminator)
+        else:
+            if prop.pattern.is_response and prop.pattern.is_prevention:
+                assert trigger is not None
+                self._build_trigger(trigger, terminator)
+            self._build_randoms(None, terminator)
+
+    def _build_trigger(self, trigger, terminator):
+        topic = trigger.topic
+        if topic not in self.topics:
+            raise SpecError("cannot publish on topic '{}'".format(topic))
+        rostype, assumed = self.topics.get(topic)
+        phi = trigger.predicate.join(assumed)
+        if terminator is not None and terminator.topic == topic:
+            if terminator.predicate.is_vacuous:
+                raise SpecError("trigger and terminator on the same topic")
+            phi = phi.join(terminator.predicate.negate())
+        self.trigger = self._build(rostype, phi)
+
+    def _build_randoms(self, trigger, terminator):
+        for topic, data in self.topics.items():
+            rostype, assumed = data
+            if trigger and topic == trigger.topic:
+                phi = trigger.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match trigger or terminator
+                    phi = phi.negate()
+                    if terminator and topic == terminator.topic:
+                        psi = terminator.predicate
+                        if psi.is_vacuous:
+                            # TODO warning? trigger is impossible
+                            continue # no random messages
+                        else:
+                            phi = phi.join(psi.negate())
+                    phi = phi.join(assumed)
+                    self.strategies[topic] = self._build(rostype, phi)
+            elif terminator and topic == terminator.topic:
+                phi = terminator.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match terminator
+                    phi = phi.negate().join(assumed)
+                    self.strategies[topic] = self._build(rostype, phi)
+            else: # random topic
+                self.strategies[topic] = self._build(rostype, assumed)
+
+
+class Stage3Builder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + ("topics", "strategies")
+
+    def __init__(self, topics):
+        super(Stage3Builder, self).__init__()
+        self.topics = topics
+
+    def build(self, prop):
+        self.strategies = {}
+        if not (prop.pattern.is_response or prop.pattern.is_prevention):
+            return # other patterns do not have this stage
+        self._build_randoms(prop.pattern.trigger, prop.scope.terminator)
+
+    def _build_randoms(self, trigger, terminator):
+        assert trigger is not None
+        for topic, data in self.topics.items():
+            rostype, assumed = data
+            if topic == trigger.topic:
+                phi = trigger.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match trigger or terminator
+                    phi = phi.negate()
+                    if terminator and topic == terminator.topic:
+                        psi = terminator.predicate
+                        if psi.is_vacuous:
+                            continue # no random messages
+                        else:
+                            phi = phi.join(psi.negate())
+                    phi = phi.join(assumed)
+                    self.strategies[topic] = self._build(rostype, phi)
+            elif terminator and topic == terminator.topic:
+                phi = terminator.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match terminator
+                    phi = phi.negate().join(assumed)
+                    self.strategies[topic] = self._build(rostype, phi)
+            else: # random topic
+                self.strategies[topic] = self._build(rostype, assumed)
