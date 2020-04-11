@@ -30,7 +30,9 @@ from collections import namedtuple
 from itertools import chain as iterchain
 import os
 
-from haros.hpl.hpl_ast import HplVacuousTruth
+from haros.hpl.hpl_ast import (
+    HplVacuousTruth, HplBinaryOperator, HplLiteral, HplUnaryOperator
+)
 from haros.hpl.ros_types import get_type # FIXME
 from jinja2 import Environment, PackageLoader
 
@@ -421,68 +423,9 @@ class CustomStrategyBuilder(object):
         self.pkg_imports = set()
         self.types_by_message = {}
 
-    def fake_strategies(self, monitor):
-        # this is basically just type checking
-        # FIXME this is not working yet - cannot deal with aliases
-        for event in monitor.events:
-            try:
-                strategy = self._msg_generator(
-                    event.type_token, event.conditions)
-                strategy.build()
-            except (KeyError, IndexError) as e:
-                raise SpecError("unable to find field:" + str(e))
-            except CyclicDependencyError as e:
-                raise SpecError("found cyclic dependencies: " + str(e))
-            except InvalidFieldOperatorError as e:
-                raise SpecError("invalid use of operator " + str(e))
-
     def make_strategies(self, monitor, publishers, assumptions):
         self.strategies = []
-        for topic, pub in publishers.items():
-            msg_filter = assumptions.get(topic)
-            if msg_filter is not None:
-                self.pkg_imports.add(pub.type_token.package)
-                self.strategies.append(self._publisher(pub, msg_filter))
-        if monitor.activator is not None:
-            # the whole chain must happen
-            for event in monitor.activator.events:
-                assert event.topic in publishers, "{} not in {}; «{}»".format(
-                    event.topic, tuple(publishers), monitor.hpl_string)
-                pub = publishers[event.topic]
-                self.pkg_imports.add(pub.type_token.package)
-                if event.has_conditions:
-                    self.strategies.append(self._event(event, pub))
-                elif pub.strategies:
-                    event.strategy = pub.strategies[-1]
-        trigger = monitor.trigger
-        if trigger is not None:
-            if (monitor.is_safety
-                    and not any(e.log_age < INF for e in trigger.leaves)):
-                # make sure the roots do not happen; prevent the chain
-                # TODO chain can theoretically be prevented at any point
-                for event in trigger.roots:
-                    if (event.topic in publishers and not event.has_conditions
-                            and not event.ref_count):
-                        # negation of any msg is no msg at all
-                        del publishers[event.topic]
-                for event in trigger.roots:
-                    if event.topic in publishers and event.has_conditions:
-                        pub = publishers[event.topic]
-                        self.pkg_imports.add(pub.type_token.package)
-                        strat = self._event(event, pub, negate=True)
-                        self.strategies.append(strat)
-                        pub.strategies.append(strat)
-            elif monitor.is_liveness:
-                # the whole chain must happen
-                for event in trigger.events:
-                    assert event.topic in publishers, "{} not in {}".format(
-                        event.topic, publishers)
-                    pub = publishers[event.topic]
-                    self.pkg_imports.add(pub.type_token.package)
-                    if event.has_conditions:
-                        self.strategies.append(self._event(event, pub))
-                    elif pub.strategies:
-                        event.strategy = pub.strategies[-1]
+        
         return self.strategies
 
     def _publisher(self, publisher, msg_filter):
@@ -676,7 +619,126 @@ class StrategyBuilder(object):
     def __init__(self):
 
     def _build(self, rostype, phi):
+        assert phi.is_predicate
+        if phi.is_vacuous:
+            if phi.is_true:
+                return self._default_strategy(rostype)
+            else:
+                raise SpecError("unsatisfiable predicate")
+        primitives, arrays = rostype.leaf_fields()
+        conditions = self._convert_to_old_format(phi.condition)
         return None
+
+    def _default_strategy(self, rostype):
+        assert rostype.is_message
+
+    def _convert_to_old_format(self, phi):
+        assert phi.is_expression and phi.can_be_bool
+        relational = ("=", "!=", "<", "<=", ">", ">=", "in")
+        conditions = []
+        stack = [phi]
+        while stack:
+            expr = stack.pop()
+            if expr.is_quantifier:
+                raise NotImplementedError("quantifiers are not implemented")
+            elif expr.is_function_call:
+                raise NotImplementedError("function calls are not implemented")
+            elif phi.is_accessor:
+                expr = HplBinaryOperator("=", expr, HplLiteral("True", True))
+                conditions.append(expr)
+            elif expr.is_operator:
+                if expr.arity == 1:
+                    assert expr.operator == "not"
+                    expr = expr.operand
+                    if expr.is_accessor:
+                        conditions.append(HplBinaryOperator("=", expr,
+                            HplLiteral("False", False)))
+                    elif expr.is_operator:
+                        if expr.operator == "not":
+                            stack.append(expr.operand)
+                        elif expr.operator == "or":
+                            stack.append(HplUnaryOperator("not", expr.operand1))
+                            stack.append(HplUnaryOperator("not", expr.operand2))
+                        elif expr.operator == "=":
+                            stack.append(HplBinaryOperator("!=",
+                                expr.operand1, expr.operand2))
+                        elif expr.operator == "!=":
+                            stack.append(HplBinaryOperator("=",
+                                expr.operand1, expr.operand2))
+                        elif expr.operator == "<":
+                            stack.append(HplBinaryOperator(">=",
+                                expr.operand1, expr.operand2))
+                        elif expr.operator == "<=":
+                            stack.append(HplBinaryOperator(">",
+                                expr.operand1, expr.operand2))
+                        elif expr.operator == ">":
+                            stack.append(HplBinaryOperator("<=",
+                                expr.operand1, expr.operand2))
+                        elif expr.operator == ">=":
+                            stack.append(HplBinaryOperator("<",
+                                expr.operand1, expr.operand2))
+                        elif expr.operator == "in":
+                            pass # FIXME
+                        else:
+                            raise NotImplementedError("negation is not implemented")
+                    else:
+                        raise NotImplementedError("negation is not implemented")
+                else:
+                    if expr.operator == "and":
+                        stack.append(expr.operand1)
+                        stack.append(expr.operand2)
+                    elif expr.operator in relational:
+                        x = expr.operand1
+                        y = expr.operand2
+                        if not x.is_accessor:
+                            raise NotImplementedError(
+                                "general LHS operands are not implemented")
+                        if not (y.is_accessor or y.is_value):
+                            raise NotImplementedError(
+                                "general RHS operands are not implemented")
+                        conditions.append(expr)
+                        return conditions
+                    else:
+                        raise NotImplementedError("operators are not implemented")
+        return conditions
+
+    def _msg_generator(self, type_token, conditions, len_conditions):
+        strategy = MessageStrategyGenerator(type_token)
+        for condition in iterchain(conditions, len_conditions):
+            selector = Selector(condition.field.token, type_token)
+            strategy.ensure_generator(selector)
+        for condition in conditions:
+            self._set_condition(strategy, condition, type_token)
+        return strategy
+
+"""
+>>> from z3 import *
+>>> x, y = BitVecs('msg.field @i', 32)
+>>> s = Optimize()
+>>> s.add(x + y == 10)
+>>> s.add(UGT(x, 0x7FFFFFFF))
+>>> mx = s.minimize(x)
+>>> s.check()
+sat
+>>> s.model()
+[@i = 2147483658, msg.field = 2147483648]
+>>> s.model()[x].as_signed_long()
+-2147483648
+
+>>> s = Optimize()
+>>> s.add(x + y == 10)
+>>> s.add(ULE(x, 0x7FFFFFFF))
+>>> mx = s.maximize(x)
+>>> s.check()
+sat
+>>> s.model()[x].as_signed_long()
+2147483647
+>>> s.model()
+[@i = 2147483659, msg.field = 2147483647]
+
+32-bit float: x = FP('x', FPSort(8, 24))
+64-bit float: x = FP('x', FPSort(11, 53))
+"""
 
 
 class Stage1Builder(StrategyBuilder):
