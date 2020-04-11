@@ -741,6 +741,61 @@ sat
 """
 
 
+"""
+>>> from sympy import Symbol, solve
+>>> x = Symbol('x')
+>>> r = solve(x**2 - 1, x)
+>>> r
+[-1, 1]
+>>> type(r[0])
+<class 'sympy.core.numbers.NegativeOne'>
+>>> r = solve(x - 4, x)
+>>> r = solve(x > 3, x)
+>>> r
+(3 < x) & (x < oo)
+>>> type(r)
+And
+>>> r.is_number
+False
+>>> r.is_Boolean
+True
+>>> bool(r)
+True
+>>> r.args
+(3 < x, x < oo)
+>>> from sympy import Not, Eq
+>>> solve(Not(Eq(x, 4)), x)
+(x > -oo) & (x < oo) & Ne(x, 4)
+>>> r = solve(Not(Eq(x, 4)), x)
+>>> r.args
+(x > -oo, x < oo, Ne(x, 4))
+>>> r.is_number
+False
+>>> r.is_Boolean
+True
+>>> from sympy import Or
+>>> r = solve(Or(x > 4, x < -4), x)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/home/andre/ros/harosenv/local/lib/python2.7/site-packages/sympy/solvers/solvers.py", line 1174, in solve
+    solution = _solve(f[0], *symbols, **flags)
+  File "/home/andre/ros/harosenv/local/lib/python2.7/site-packages/sympy/solvers/solvers.py", line 1511, in _solve
+    f_num, sol = solve_linear(f, symbols=symbols)
+  File "/home/andre/ros/harosenv/local/lib/python2.7/site-packages/sympy/solvers/solvers.py", line 2085, in solve_linear
+    eq = lhs - rhs
+TypeError: unsupported operand type(s) for -: 'Or' and 'int'
+>>> Or(solve(x > 4, x), solve(x < -4, x))
+((-oo < x) & (x < -4)) | ((4 < x) & (x < oo))
+>>> _
+((-oo < x) & (x < -4)) | ((4 < x) & (x < oo))
+>>> _.args
+((-oo < x) & (x < -4), (4 < x) & (x < oo))
+>>> r = solve([x * 2 + 3 > 15, x >= -128, x < 128], x)
+>>> r
+(6 < x) & (x < 128)
+"""
+
+
 class Stage1Builder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + (
         "topics", "strategies", "activator")
