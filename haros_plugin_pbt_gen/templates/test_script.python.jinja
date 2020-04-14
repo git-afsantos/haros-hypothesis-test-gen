@@ -193,6 +193,9 @@ def all_except(array, exclude):
 # Custom Message Strategies
 ################################################################################
 
+{# Strategies = ("stages", "activator", "trigger") #}
+{# stages = (topic -> strategy (random msg)) #}
+{# MsgStrategy = ("name", "args", "pkg", "msg", "statements", "is_default") #}
 {% for entry in custom_strategies %}
 
 {{ strats.custom_msg(entry) }}

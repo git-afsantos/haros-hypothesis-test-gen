@@ -91,18 +91,22 @@ def _validate_settings(iface, settings):
 ################################################################################
 
 PublisherTemplate = namedtuple("PublisherTemplate",
-    ("topic", "type_token", "rospy_type", "strategies"))
+    ("topic", "type_token", "rospy_type"))
 
 TestTemplate = namedtuple("TestTemplate", ("monitor", "custom_strategies",
     "publishers", "subscribers", "pkg_imports", "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
-CustomMsgStrategy = namedtuple("CustomMsgStrategy",
-    ("name", "args", "pkg", "msg", "statements"))
+MsgStrategy = namedtuple("MsgStrategy",
+    ("name", "args", "pkg", "msg", "statements", "is_default"))
 
 
 class SpecError(Exception):
+    pass
+
+
+class StrategyError(Exception):
     pass
 
 
@@ -114,21 +118,19 @@ class TestGenerator(object):
     def __init__(self, iface, config, settings):
         self.iface = iface
         self.config = config
-        self.properties = config.hpl_properties
-        self.assumptions = {
-            p.topic: p.predicate for p in config.hpl_assumptions
-            if p.predicate.is_fully_typed()
-        }
         self.settings = settings
         self.commands = config.launch_commands
-        self.nodes = list(n.rosname.full for n in config.nodes.enabled)
         self.subbed_topics = self._get_open_subbed_topics()
         self.pubbed_topics = self._get_all_pubbed_topics()
         self.subscribers = self._get_subscribers()
-        self.pkg_imports = {"std_msgs"}
-        for type_token in self.pubbed_topics.values():
-            self.pkg_imports.add(type_token.package)
-        self.default_strategies = self._get_default_strategies()
+        assumptions = []
+        for p in config.hpl_assumptions:
+            if p.is_fully_typed():
+                assumptions.append(p)
+            else:
+                self.iface.log_warning(
+                    "Skipping untyped assumption:\n{}".format(p))
+        self.strategies = StrategyManager(self.subbed_topics, assumptions)
 
     def make_tests(self, config_num):
         monitors, tests = self._make_monitors_and_tests()
@@ -188,94 +190,28 @@ class TestGenerator(object):
             subs.append(Subscriber(topic, type_token, False))
         return subs
 
-    def _make_strategies(self):
-        """
-        /terminator_topic:
-            vacuous predicate:
-                - avoid publishing on topic
-                - error if activator or 'causes' trigger
-            normal predicate:
-                - negate it and add to assumptions
-        /activator_topic:
-            vacuous predicate:
-                - avoid publishing random msgs on topic *before* the activator
-            normal predicate:
-                - negate it and add to assumptions of random msgs *before*
-        /trigger_topic:
-            precedence:
-                vacuous predicate:
-                    - avoid publishing random msgs *after* the activator
-                normal predicate:
-                    - negate it and add to assumptions of random msgs *after*
-            response:
-                - anything goes, so long as it is not a terminator
-                - no random triggers after *the* trigger
-        /behaviour_topic:
-            - warning in monitors if assumptions are not met?
-        publisher stages:
-            - stage 1: before the activator (if not launch); 0+ chunks
-            - stage 2: entering the scope; 1 chunk
-            - stage 3: within scope, before trigger; 0+ chunks
-            - stage 4: trigger; 1 chunk
-            - stage 5: within scope, after trigger; 0+ chunks
-        """
-
-
-
-
-
-
-
-
-    def _get_default_strategies(self):
-        queue = list(self.subbed_topics.values())
-        strategies = {}
-        while queue:
-            new_queue = []
-            for type_token in queue:
-                if type_token.is_primitive or type_token.is_header:
-                    continue
-                if type_token.is_time or type_token.is_duration:
-                    continue
-                if type_token.is_array or type_token.type_name in strategies:
-                    continue
-                self.pkg_imports.add(type_token.package)
-                strategies[type_token.type_name] = type_token
-                new_queue.extend(type_token.fields.values())
-            queue = new_queue
-        return tuple(strategies.values())
-
-    # TODO check if property AST has deterministic type info
-
     def _make_monitors_and_tests(self):
         all_monitors = []
         tests = []
-        for i in range(len(self.properties)):
-            p = self.properties[i]
+        for i in range(len(self.config.hpl_properties)):
+            p = self.config.hpl_properties[i]
             if not p.is_fully_typed():
                 self.iface.log_warning(
                     "Skipping untyped property:\n{}".format(p))
+                continue
             uid = "P" + str(i + 1)
             monitor = MonitorTemplate(
                 uid, p, self.pubbed_topics, self.subbed_topics)
-            self._inject_assumptions(monitor)
             all_monitors.append(monitor)
-            if monitor.is_testable:
-                publishers = self._get_publishers(monitor.terminator)
-                custom = CustomStrategyBuilder()
-                custom.make_strategies(monitor, publishers, self.assumptions)
-                # ^ custom.make_strategies() may change publishers
-                custom.pkg_imports.update(self.pkg_imports)
-                publishers = list(publishers.values())
-                self._apply_slack(monitor)
-                tests.append(TestTemplate(
-                    monitor, custom.strategies, publishers, self.subscribers,
-                    custom.pkg_imports, monitor.hpl_string))
-            else:
-                msg = ("Cannot produce a test script for the "
-                       "following property: ")
-                msg += monitor.hpl_string
-                self.iface.log_warning(msg)
+            try:
+                strategies = self.strategies.build_strategies(p)
+            except StrategyError as e:
+                self.iface.log_warning(
+                    "Cannot produce a test for:\n'{}'\n\n{}".format(p, e))
+            self._apply_slack(monitor)
+            tests.append(TestTemplate(
+                monitor, strategies, self._get_publishers(), self.subscribers,
+                self.strategies.pkg_imports, monitor.hpl_string))
             monitor.variable_substitution()
         return all_monitors, tests
 
@@ -293,38 +229,13 @@ class TestGenerator(object):
         # any other value is invalid; assume default behaviour
         return monitors
 
-    def _get_publishers(self, terminator):
-        avoid = set()
-        if terminator is not None:
-            for event in terminator.roots: # FIXME
-                avoid.add(event.topic)
-        pubs = {}
+    def _get_publishers(self):
+        # FIXME build list based on self.strategies stages
+        pubs = []
         for topic, type_token in self.subbed_topics.items():
-            if topic not in avoid:
-                rospy_type = type_token.type_name.replace("/", ".")
-                pubs[topic] = PublisherTemplate(
-                    topic, type_token, rospy_type, [])
+            rospy_type = type_token.type_name.replace("/", ".")
+            pubs.append(PublisherTemplate(topic, type_token, rospy_type))
         return pubs
-
-    def _inject_assumptions(self, monitor): # FIXME
-        event_map = {}
-        for event in monitor.events:
-            predicate = self.assumptions.get(event.topic)
-            if predicate is not None:
-                event.conditions.extend(predicate.condition)
-            if event.alias:
-                event_map[event.alias] = event
-            lengths = {}
-            for condition in event.conditions:
-                self._length_for_field(condition.field.token,
-                    event.type_token, lengths)
-                self._length_for_value(condition.value, event.type_token,
-                    lengths, event_map)
-            # v -- NOTE saved_vars is probably not yet assigned
-            for field_token in event.saved_vars.values():
-                self._length_for_field(field_token, event.type_token, lengths)
-            for token, min_length in lengths.items():
-                event.add_min_length_condition(token, min_length)
 
     def _length_for_field(self, field_token, type_token, lengths):
         selector = Selector(field_token, type_token)
@@ -393,7 +304,7 @@ class TestGenerator(object):
             "events": tuple(e for m in all_monitors for e in m.events),
             "main_monitor": test_case.monitor,
             "monitors": all_monitors,
-            "default_strategies": self.default_strategies,
+            "default_strategies": self.strategies.default_strategies,
             "custom_strategies": test_case.custom_strategies,
             "publishers": test_case.publishers,
             "subscribers": test_case.subscribers,
@@ -402,7 +313,7 @@ class TestGenerator(object):
             "pkg_imports": test_case.pkg_imports,
             "property_text": test_case.property_text,
             "slack": self.settings.get("slack", 0.0),
-            "nodes": self.nodes,
+            "nodes": list(n.rosname.full for n in self.config.nodes.enabled),
             "commands": self.commands
         }
         with open(filename, "w") as f:
@@ -411,156 +322,6 @@ class TestGenerator(object):
         mode |= (mode & 0o444) >> 2
         os.chmod(filename, mode)
         self.iface.export_file(filename)
-
-
-################################################################################
-# Custom Message Strategies
-################################################################################
-
-class CustomStrategyBuilder(object):
-    def __init__(self):
-        self.strategies = []
-        self.pkg_imports = set()
-        self.types_by_message = {}
-
-    def make_strategies(self, monitor, publishers, assumptions):
-        self.strategies = []
-        
-        return self.strategies
-
-    def _publisher(self, publisher, msg_filter):
-        type_token = publisher.type_token
-        self.types_by_message[None] = type_token
-        strategy = self._strategy(type_token, msg_filter.conditions,
-                                  msg_filter.length_conditions)
-        publisher.strategies.append(strategy)
-        return strategy
-
-    def _event(self, event, publisher, negate=False):
-        type_token = publisher.type_token
-        self.types_by_message[event.alias] = type_token
-        if event.alias is not None:
-            self.types_by_message[None] = type_token
-        if negate:
-            # TODO improve this, not all must be negated at once;
-            #   it should loop and negate one condition at a time.
-            conditions = [c.negation() for c in event.conditions]
-            len_conds = [c.negation() for c in event.length_conditions]
-        else:
-            conditions = event.conditions
-            len_conds = event.length_conditions
-        strategy = self._strategy(type_token, conditions, len_conds)
-        event.strategy = strategy
-        return strategy
-
-    def _strategy(self, type_token, conditions, len_conditions):
-        strategy = self._msg_generator(type_token, conditions, len_conditions)
-        i = len(self.strategies) + 1
-        name = "cms{}_{}_{}".format(i, type_token.package, type_token.message)
-        return CustomMsgStrategy(name, strategy.args, type_token.package,
-                                 type_token.message, strategy.build())
-
-    def _msg_generator(self, type_token, conditions, len_conditions):
-        strategy = MessageStrategyGenerator(type_token)
-        for condition in iterchain(conditions, len_conditions):
-            selector = Selector(condition.field.token, type_token)
-            strategy.ensure_generator(selector)
-        for condition in conditions:
-            self._set_condition(strategy, condition, type_token)
-        for condition in len_conditions:
-            self._set_len_condition(strategy, condition, type_token)
-        return strategy
-
-    def _set_condition(self, strategy, condition, type_token):
-        selector = Selector(condition.field.token, type_token)
-        value = self._value(condition.value, strategy)
-        if condition.is_eq:
-            strategy.set_eq(selector, value)
-        elif condition.is_neq:
-            strategy.set_neq(selector, value)
-        elif condition.is_lt:
-            strategy.set_lt(selector, value)
-        elif condition.is_lte:
-            strategy.set_lte(selector, value)
-        elif condition.is_gt:
-            strategy.set_gt(selector, value)
-        elif condition.is_gte:
-            strategy.set_gte(selector, value)
-        elif condition.is_in:
-            if condition.value.is_range:
-                if condition.value.exclude_lower:
-                    strategy.set_gt(selector, value[0])
-                else:
-                    strategy.set_gte(selector, value[0])
-                if condition.value.exclude_upper:
-                    strategy.set_lt(selector, value[1])
-                else:
-                    strategy.set_lte(selector, value[1])
-            else:
-                strategy.set_in(selector, value)
-        elif condition.is_not_in:
-            if condition.value.is_range:
-                strategy.set_not_in_range(selector, value[0], value[1],
-                    exclude_min=condition.value.exclude_lower,
-                    exclude_max=condition.value.exclude_upper)
-            else:
-                strategy.set_not_in(selector, value)
-
-    def _set_len_condition(self, strategy, condition, type_token):
-        selector = Selector(condition.field.token, type_token)
-        value = self._value(condition.value, strategy)
-        if condition.is_eq:
-            strategy.set_attr_eq(selector, value, "length")
-        elif condition.is_neq:
-            strategy.set_attr_neq(selector, value, "length")
-        elif condition.is_lt:
-            strategy.set_attr_lt(selector, value, "length")
-        elif condition.is_lte:
-            strategy.set_attr_lte(selector, value, "length")
-        elif condition.is_gt:
-            strategy.set_attr_gt(selector, value, "length")
-        elif condition.is_gte:
-            strategy.set_attr_gte(selector, value, "length")
-        elif condition.is_in:
-            if condition.value.is_range:
-                if condition.value.exclude_lower:
-                    strategy.set_attr_gt(selector, value[0], "length")
-                else:
-                    strategy.set_attr_gte(selector, value[0], "length")
-                if condition.value.exclude_upper:
-                    strategy.set_attr_lt(selector, value[1], "length")
-                else:
-                    strategy.set_attr_lte(selector, value[1], "length")
-            else:
-                strategy.set_attr_in(selector, value, "length")
-        elif condition.is_not_in:
-            if condition.value.is_range:
-                strategy.set_attr_not_in_range(selector, value[0], value[1],
-                    "length", exclude_min=condition.value.exclude_lower,
-                    exclude_max=condition.value.exclude_upper)
-            else:
-                strategy.set_attr_not_in(selector, value, "length")
-
-    def _value(self, hpl_value, strategy):
-        if hpl_value.is_reference:
-            type_token = self.types_by_message[hpl_value.message]
-            # check for constants
-            if len(hpl_value.parts) == 1:
-                ros_literal = type_token.constants.get(hpl_value.token)
-                if ros_literal is not None:
-                    return ros_literal.value
-            selector = Selector(hpl_value.token, type_token)
-            if hpl_value.message is None:
-                return selector
-            return strategy.make_msg_arg(hpl_value.message, selector)
-        if hpl_value.is_literal:
-            return hpl_value.value
-        if hpl_value.is_range:
-            return (self._value(hpl_value.lower_bound, strategy),
-                    self._value(hpl_value.upper_bound, strategy))
-        if hpl_value.is_set:
-            return tuple(self._value(v, strategy) for v in hpl_value.values)
-        raise TypeError("unknown value type: " + type(hpl_value).__name__)
 
 
 ################################################################################
@@ -586,11 +347,27 @@ class StrategyManager(object):
     __slots__ = ("stage1", "stage2", "stage3")
 
     def __init__(self, pubs, assumptions):
+        # pubs: topic -> ROS type token
+        # assumptions: [HplAssumption]
+        default_strategies = {}
+        pkg_imports = {"std_msgs"}
         # topic -> (type token, predicate)
         topics = self._mapping(pubs, assumptions)
-        self.stage1 = Stage1Builder(topics)
-        self.stage2 = Stage2Builder(topics)
-        self.stage3 = Stage3Builder(topics)
+        self.stage1 = Stage1Builder(topics, default_strategies, pkg_imports)
+        self.stage2 = Stage2Builder(topics, default_strategies, pkg_imports)
+        self.stage3 = Stage3Builder(topics, default_strategies, pkg_imports)
+
+    @property
+    def default_strategies(self):
+        assert (self.stage1.default_strategies is self.stage2.default_strategies
+            and self.stage1.default_strategies is self.stage3.default_strategies)
+        return self.stage1.default_strategies
+
+    @property
+    def pkg_imports(self):
+        assert (self.stage1.pkg_imports is self.stage2.pkg_imports
+            and self.stage1.pkg_imports is self.stage3.pkg_imports)
+        return self.stage1.pkg_imports
 
     def build_strategies(self, prop):
         self.stage1.build(prop)
@@ -614,25 +391,51 @@ class StrategyManager(object):
 
 
 class StrategyBuilder(object):
-    __slots__ = ()
+    __slots__ = ("types_by_message", "counter", "default_strategies",
+                 "pkg_imports")
 
-    def __init__(self):
+    def __init__(self, default_strategies, pkg_imports):
+        self.types_by_message = {}
+        self.counter = 0
+        self.default_strategies = default_strategies
+        self.pkg_imports = pkg_imports
 
-    def _build(self, rostype, phi):
+    def _build(self, rostype, phi, fun_name="cms"):
         assert phi.is_predicate
         if phi.is_vacuous:
             if phi.is_true:
                 return self._default_strategy(rostype)
             else:
-                raise SpecError("unsatisfiable predicate")
-        primitives, arrays = rostype.leaf_fields()
+                raise StrategyError("unsatisfiable predicate")
         conditions = self._convert_to_old_format(phi.condition)
-        return None
+        strategy = self._msg_generator(rostype, conditions)
+        self.pkg_imports.add(rostype.package)
+        self.counter += 1
+        name = "{}{}_{}_{}".format(
+            fun_name, self.counter, rostype.package, rostype.message)
+        return MsgStrategy(name, strategy.args, type_token.package,
+                           type_token.message, strategy.build(), False)
 
     def _default_strategy(self, rostype):
         assert rostype.is_message
+        if rostype.type_name not in self.default_strategies:
+            stack = [rostype]
+            while stack:
+                type_token = stack.pop()
+                if type_token.is_primitive or type_token.is_header:
+                    continue
+                if type_token.is_time or type_token.is_duration:
+                    continue
+                if type_token.is_array or type_token.type_name in strategies:
+                    continue
+                self.pkg_imports.add(type_token.package)
+                self.default_strategies[type_token.type_name] = type_token
+                stack.extend(type_token.fields.values())
+        return MsgStrategy(rostype.type_name.replace("/", "_"),
+            (), rostype.package, rostype.message, (), True)
 
     def _convert_to_old_format(self, phi):
+        # FIXME remove this and remake the strategy generator
         assert phi.is_expression and phi.can_be_bool
         relational = ("=", "!=", "<", "<=", ">", ">=", "in")
         conditions = []
@@ -640,9 +443,9 @@ class StrategyBuilder(object):
         while stack:
             expr = stack.pop()
             if expr.is_quantifier:
-                raise NotImplementedError("quantifiers are not implemented")
+                raise StrategyError("quantifiers are not implemented")
             elif expr.is_function_call:
-                raise NotImplementedError("function calls are not implemented")
+                raise StrategyError("function calls are not implemented")
             elif phi.is_accessor:
                 expr = HplBinaryOperator("=", expr, HplLiteral("True", True))
                 conditions.append(expr)
@@ -678,11 +481,29 @@ class StrategyBuilder(object):
                             stack.append(HplBinaryOperator("<",
                                 expr.operand1, expr.operand2))
                         elif expr.operator == "in":
-                            pass # FIXME
+                            x = expr.operand1
+                            y = expr.operand2
+                            if not x.is_accessor:
+                                raise StrategyError(
+                                    "general LHS operands are not implemented")
+                            if not (y.is_accessor or y.is_value):
+                                raise StrategyError(
+                                    "general RHS operands are not implemented")
+                            if y.is_accessor:
+                                raise StrategyError(
+                                    "general RHS operands are not implemented")
+                            elif y.is_set:
+                                for value in y.values:
+                                    conditions.append(HplBinaryOperator("!=",
+                                        x, value))
+                            else:
+                                assert y.is_range
+                                raise StrategyError(
+                                    "general RHS operands are not implemented")
                         else:
-                            raise NotImplementedError("negation is not implemented")
+                            raise StrategyError("negation is not implemented")
                     else:
-                        raise NotImplementedError("negation is not implemented")
+                        raise StrategyError("negation is not implemented")
                 else:
                     if expr.operator == "and":
                         stack.append(expr.operand1)
@@ -691,25 +512,79 @@ class StrategyBuilder(object):
                         x = expr.operand1
                         y = expr.operand2
                         if not x.is_accessor:
-                            raise NotImplementedError(
+                            raise StrategyError(
                                 "general LHS operands are not implemented")
                         if not (y.is_accessor or y.is_value):
-                            raise NotImplementedError(
+                            raise StrategyError(
                                 "general RHS operands are not implemented")
                         conditions.append(expr)
-                        return conditions
                     else:
-                        raise NotImplementedError("operators are not implemented")
+                        raise StrategyError("operators are not implemented")
         return conditions
 
-    def _msg_generator(self, type_token, conditions, len_conditions):
+    def _msg_generator(self, type_token, conditions):
         strategy = MessageStrategyGenerator(type_token)
-        for condition in iterchain(conditions, len_conditions):
-            selector = Selector(condition.field.token, type_token)
+        for condition in conditions:
+            # FIXME Selector should accept AST nodes instead of strings
+            selector = Selector(str(condition.operand1), type_token)
             strategy.ensure_generator(selector)
         for condition in conditions:
             self._set_condition(strategy, condition, type_token)
         return strategy
+
+    def _set_condition(self, strategy, condition, type_token):
+        selector = Selector(str(condition.operand1), type_token)
+        value = self._value(condition.operand2, strategy, type_token)
+        if condition.operator == "=":
+            strategy.set_eq(selector, value)
+        elif condition.operator == "!=":
+            strategy.set_neq(selector, value)
+        elif condition.operator == "<":
+            strategy.set_lt(selector, value)
+        elif condition.operator == "<=":
+            strategy.set_lte(selector, value)
+        elif condition.operator == ">":
+            strategy.set_gt(selector, value)
+        elif condition.operator == ">=":
+            strategy.set_gte(selector, value)
+        elif condition.operator == "in":
+            if condition.operand2.is_range:
+                if condition.operand2.exclude_min:
+                    strategy.set_gt(selector, value[0])
+                else:
+                    strategy.set_gte(selector, value[0])
+                if condition.operand2.exclude_max:
+                    strategy.set_lt(selector, value[1])
+                else:
+                    strategy.set_lte(selector, value[1])
+            else:
+                strategy.set_in(selector, value)
+
+    def _value(self, expr, strategy, type_token):
+        if expr.is_accessor:
+            msg = expr.base_message()
+            if not msg.is_this_msg:
+                assert msg.is_variable
+                type_token = self.types_by_message[msg.name]
+            # check for constants
+            if expr.is_field and expr.message.is_value:
+                ros_literal = type_token.constants.get(expr.field)
+                if ros_literal is not None:
+                    return ros_literal.value
+            selector = Selector(str(expr), type_token)
+            if msg.is_this_msg:
+                return selector
+            return strategy.make_msg_arg(msg.name, selector)
+        assert expr.is_value
+        if expr.is_literal:
+            return expr.value
+        if expr.is_range:
+            return (self._value(expr.min_value, strategy, type_token),
+                    self._value(expr.max_value, strategy, type_token))
+        if expr.is_set:
+            return tuple(self._value(v, strategy, type_token)
+                         for v in expr.values)
+        raise StrategyError("unknown value type: " + repr(expr))
 
 """
 >>> from z3 import *
@@ -800,8 +675,8 @@ class Stage1Builder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + (
         "topics", "strategies", "activator")
 
-    def __init__(self, topics):
-        super(Stage1Builder, self).__init__()
+    def __init__(self, topics, default_strategies, pkg_imports):
+        super(Stage1Builder, self).__init__(default_strategies, pkg_imports)
         self.topics = topics
 
     def build(self, prop):
@@ -816,10 +691,10 @@ class Stage1Builder(StrategyBuilder):
     def _build_activator(self, event):
         topic = event.topic
         if topic not in self.topics:
-            raise SpecError("cannot publish on topic '{}'".format(topic))
+            raise StrategyError("cannot publish on topic '{}'".format(topic))
         rostype, assumed = self.topics.get(topic)
         phi = event.predicate.join(assumed)
-        self.activator = self._build(rostype, phi)
+        self.activator = self._build(rostype, phi, fun_name="s1cs")
 
     def _build_randoms(self, event):
         for topic, data in self.topics.items():
@@ -831,17 +706,19 @@ class Stage1Builder(StrategyBuilder):
                 else:
                     # cannot match activator
                     phi = phi.negate().join(assumed)
-                    self.strategies[topic] = self._build(rostype, phi)
+                    self.strategies[topic] = self._build(
+                        rostype, phi, fun_name="s1cs")
             else: # random topic
-                self.strategies[topic] = self._build(rostype, assumed)
+                self.strategies[topic] = self._build(
+                    rostype, assumed, fun_name="s1cs")
 
 
 class Stage2Builder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + (
         "topics", "strategies", "trigger")
 
-    def __init__(self, topics):
-        super(Stage2Builder, self).__init__()
+    def __init__(self, topics, default_strategies, pkg_imports):
+        super(Stage2Builder, self).__init__(default_strategies, pkg_imports)
         self.topics = topics
 
     def build(self, prop):
@@ -849,26 +726,32 @@ class Stage2Builder(StrategyBuilder):
         self.trigger = None
         trigger = prop.pattern.trigger
         terminator = prop.scope.terminator
+        if prop.pattern.behaviour.topic in self.topics:
+            raise StrategyError("topic '{}' is not advertised".format(topic))
         if prop.pattern.is_requirement:
             assert trigger is not None
             self._build_randoms(trigger, terminator)
         else:
             if prop.pattern.is_response and prop.pattern.is_prevention:
                 assert trigger is not None
+                activator = prop.scope.activator
+                if activator is not None and activator.alias is not None:
+                    rostype, assumed = self.topics.get(activator.topic)
+                    self.types_by_message[activator.alias] = rostype
                 self._build_trigger(trigger, terminator)
             self._build_randoms(None, terminator)
 
     def _build_trigger(self, trigger, terminator):
         topic = trigger.topic
         if topic not in self.topics:
-            raise SpecError("cannot publish on topic '{}'".format(topic))
+            raise StrategyError("cannot publish on topic '{}'".format(topic))
         rostype, assumed = self.topics.get(topic)
         phi = trigger.predicate.join(assumed)
         if terminator is not None and terminator.topic == topic:
             if terminator.predicate.is_vacuous:
-                raise SpecError("trigger and terminator on the same topic")
+                raise StrategyError("trigger and terminator on the same topic")
             phi = phi.join(terminator.predicate.negate())
-        self.trigger = self._build(rostype, phi)
+        self.trigger = self._build(rostype, phi, fun_name="s2cs")
 
     def _build_randoms(self, trigger, terminator):
         for topic, data in self.topics.items():
@@ -887,23 +770,26 @@ class Stage2Builder(StrategyBuilder):
                         else:
                             phi = phi.join(psi.negate())
                     phi = phi.join(assumed)
-                    self.strategies[topic] = self._build(rostype, phi)
+                    self.strategies[topic] = self._build(
+                        rostype, phi, fun_name="s2cs")
             elif terminator and topic == terminator.topic:
                 phi = terminator.predicate
                 if phi.is_vacuous:
                     continue # no random messages
                 else: # cannot match terminator
                     phi = phi.negate().join(assumed)
-                    self.strategies[topic] = self._build(rostype, phi)
+                    self.strategies[topic] = self._build(
+                        rostype, phi, fun_name="s2cs")
             else: # random topic
-                self.strategies[topic] = self._build(rostype, assumed)
+                self.strategies[topic] = self._build(
+                    rostype, assumed, fun_name="s2cs")
 
 
 class Stage3Builder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + ("topics", "strategies")
 
-    def __init__(self, topics):
-        super(Stage3Builder, self).__init__()
+    def __init__(self, topics, default_strategies, pkg_imports):
+        super(Stage3Builder, self).__init__(default_strategies, pkg_imports)
         self.topics = topics
 
     def build(self, prop):
@@ -929,13 +815,16 @@ class Stage3Builder(StrategyBuilder):
                         else:
                             phi = phi.join(psi.negate())
                     phi = phi.join(assumed)
-                    self.strategies[topic] = self._build(rostype, phi)
+                    self.strategies[topic] = self._build(
+                        rostype, phi, fun_name="s3cs")
             elif terminator and topic == terminator.topic:
                 phi = terminator.predicate
                 if phi.is_vacuous:
                     continue # no random messages
                 else: # cannot match terminator
                     phi = phi.negate().join(assumed)
-                    self.strategies[topic] = self._build(rostype, phi)
+                    self.strategies[topic] = self._build(
+                        rostype, phi, fun_name="s3cs")
             else: # random topic
-                self.strategies[topic] = self._build(rostype, assumed)
+                self.strategies[topic] = self._build(
+                    rostype, assumed, fun_name="s3cs")

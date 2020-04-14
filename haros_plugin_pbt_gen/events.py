@@ -254,45 +254,6 @@ class MonitorTemplate(object):
     def has_scope_timeout(self):
         return self.scope_timeout < INF
 
-    @property
-    def is_testable(self):
-        for event in self.behaviour.events:
-            if event.is_receive:
-                return False
-        if self.activator is not None:
-            for event in self.activator.events:
-                if not event.is_receive:
-                    return False
-        # TODO improve; we do not have to avoid whole topics.
-        #   This can be refined to avoid overlapping conditions.
-        avoid = set()
-        if self.trigger is not None:
-            if self.is_liveness:
-                for event in self.trigger.events:
-                    if not event.is_receive:
-                        return False
-                    avoid.add(event.topic)
-            elif self.is_safety:
-                for event in self.trigger.events:
-                    if event.is_receive:
-                        avoid.add(event.topic)
-        if self.terminator is not None:
-            for event in self.terminator.events:
-                if not event.is_receive:
-                    return False
-            for event in self.terminator.roots:
-                if event.topic in avoid:
-                    return False
-        # allows:
-        #   after launch until timeout/recv: ...
-        #   after recv until timeout/recv: ...
-        #       no pub
-        #       some pub
-        #       recv causes pub
-        #       pub requires pub
-        #       pub requires recv
-        return True
-
     def _set_events(self, hpl_property):
         self.activator = None # CompositeEventTemplate
         if hpl_property.scope.activator is not None:
