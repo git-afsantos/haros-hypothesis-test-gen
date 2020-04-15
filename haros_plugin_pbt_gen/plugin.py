@@ -41,6 +41,7 @@ from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
 )
 from .selectors import Selector
+from .util import convert_to_old_format
 
 
 ###############################################################################
@@ -93,7 +94,7 @@ def _validate_settings(iface, settings):
 PublisherTemplate = namedtuple("PublisherTemplate",
     ("topic", "type_token", "rospy_type"))
 
-TestTemplate = namedtuple("TestTemplate", ("monitor", "custom_strategies",
+TestTemplate = namedtuple("TestTemplate", ("monitor", "strategy_map",
     "publishers", "subscribers", "pkg_imports", "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
@@ -122,7 +123,6 @@ class TestGenerator(object):
         self.commands = config.launch_commands
         self.subbed_topics = self._get_open_subbed_topics()
         self.pubbed_topics = self._get_all_pubbed_topics()
-        self.subscribers = self._get_subscribers()
         assumptions = []
         for p in config.hpl_assumptions:
             if p.is_fully_typed():
@@ -209,8 +209,8 @@ class TestGenerator(object):
                 self.iface.log_warning(
                     "Cannot produce a test for:\n'{}'\n\n{}".format(p, e))
             self._apply_slack(monitor)
-            tests.append(TestTemplate(
-                monitor, strategies, self._get_publishers(), self.subscribers,
+            tests.append(TestTemplate(monitor, strategies,
+                self._get_publishers(), self._get_subscribers(),
                 self.strategies.pkg_imports, monitor.hpl_string))
             monitor.variable_substitution()
         return all_monitors, tests
@@ -305,7 +305,7 @@ class TestGenerator(object):
             "main_monitor": test_case.monitor,
             "monitors": all_monitors,
             "default_strategies": self.strategies.default_strategies,
-            "custom_strategies": test_case.custom_strategies,
+            "strategy_map": test_case.strategy_map,
             "publishers": test_case.publishers,
             "subscribers": test_case.subscribers,
             "settings": self.settings,
@@ -407,7 +407,8 @@ class StrategyBuilder(object):
                 return self._default_strategy(rostype)
             else:
                 raise StrategyError("unsatisfiable predicate")
-        conditions = self._convert_to_old_format(phi.condition)
+        # FIXME remove this and remake the strategy generator
+        conditions = convert_to_old_format(phi.condition)
         strategy = self._msg_generator(rostype, conditions)
         self.pkg_imports.add(rostype.package)
         self.counter += 1
@@ -433,94 +434,6 @@ class StrategyBuilder(object):
                 stack.extend(type_token.fields.values())
         return MsgStrategy(rostype.type_name.replace("/", "_"),
             (), rostype.package, rostype.message, (), True)
-
-    def _convert_to_old_format(self, phi):
-        # FIXME remove this and remake the strategy generator
-        assert phi.is_expression and phi.can_be_bool
-        relational = ("=", "!=", "<", "<=", ">", ">=", "in")
-        conditions = []
-        stack = [phi]
-        while stack:
-            expr = stack.pop()
-            if expr.is_quantifier:
-                raise StrategyError("quantifiers are not implemented")
-            elif expr.is_function_call:
-                raise StrategyError("function calls are not implemented")
-            elif phi.is_accessor:
-                expr = HplBinaryOperator("=", expr, HplLiteral("True", True))
-                conditions.append(expr)
-            elif expr.is_operator:
-                if expr.arity == 1:
-                    assert expr.operator == "not"
-                    expr = expr.operand
-                    if expr.is_accessor:
-                        conditions.append(HplBinaryOperator("=", expr,
-                            HplLiteral("False", False)))
-                    elif expr.is_operator:
-                        if expr.operator == "not":
-                            stack.append(expr.operand)
-                        elif expr.operator == "or":
-                            stack.append(HplUnaryOperator("not", expr.operand1))
-                            stack.append(HplUnaryOperator("not", expr.operand2))
-                        elif expr.operator == "=":
-                            stack.append(HplBinaryOperator("!=",
-                                expr.operand1, expr.operand2))
-                        elif expr.operator == "!=":
-                            stack.append(HplBinaryOperator("=",
-                                expr.operand1, expr.operand2))
-                        elif expr.operator == "<":
-                            stack.append(HplBinaryOperator(">=",
-                                expr.operand1, expr.operand2))
-                        elif expr.operator == "<=":
-                            stack.append(HplBinaryOperator(">",
-                                expr.operand1, expr.operand2))
-                        elif expr.operator == ">":
-                            stack.append(HplBinaryOperator("<=",
-                                expr.operand1, expr.operand2))
-                        elif expr.operator == ">=":
-                            stack.append(HplBinaryOperator("<",
-                                expr.operand1, expr.operand2))
-                        elif expr.operator == "in":
-                            x = expr.operand1
-                            y = expr.operand2
-                            if not x.is_accessor:
-                                raise StrategyError(
-                                    "general LHS operands are not implemented")
-                            if not (y.is_accessor or y.is_value):
-                                raise StrategyError(
-                                    "general RHS operands are not implemented")
-                            if y.is_accessor:
-                                raise StrategyError(
-                                    "general RHS operands are not implemented")
-                            elif y.is_set:
-                                for value in y.values:
-                                    conditions.append(HplBinaryOperator("!=",
-                                        x, value))
-                            else:
-                                assert y.is_range
-                                raise StrategyError(
-                                    "general RHS operands are not implemented")
-                        else:
-                            raise StrategyError("negation is not implemented")
-                    else:
-                        raise StrategyError("negation is not implemented")
-                else:
-                    if expr.operator == "and":
-                        stack.append(expr.operand1)
-                        stack.append(expr.operand2)
-                    elif expr.operator in relational:
-                        x = expr.operand1
-                        y = expr.operand2
-                        if not x.is_accessor:
-                            raise StrategyError(
-                                "general LHS operands are not implemented")
-                        if not (y.is_accessor or y.is_value):
-                            raise StrategyError(
-                                "general RHS operands are not implemented")
-                        conditions.append(expr)
-                    else:
-                        raise StrategyError("operators are not implemented")
-        return conditions
 
     def _msg_generator(self, type_token, conditions):
         strategy = MessageStrategyGenerator(type_token)

@@ -36,16 +36,16 @@ e.state[{{ value }}]
 {{ ref }} == {{ _rhs_value(value) }}
 {%- elif op == 'in' -%}
     {% if value.is_range -%}
-        {% if value.exclude_lower -%}
-            {{ ref }} > {{ _rhs_value(value.lower_bound) }}
+        {% if value.exclude_min -%}
+            {{ ref }} > {{ _rhs_value(value.min_value) }}
         {%- else -%}
-            {{ ref }} >= {{ _rhs_value(value.lower_bound) }}
+            {{ ref }} >= {{ _rhs_value(value.min_value) }}
         {%- endif %}{# -#}
         {{ ' and ' }}{# -#}
-        {% if value.exclude_upper -%}
-            {{ ref }} < {{ _rhs_value(value.upper_bound) }}
+        {% if value.exclude_max -%}
+            {{ ref }} < {{ _rhs_value(value.max_value) }}
         {%- else -%}
-            {{ ref }} <= {{ _rhs_value(value.upper_bound) }}
+            {{ ref }} <= {{ _rhs_value(value.max_value) }}
         {%- endif %}
     {%- else -%}
         {% set disjoin = joiner(' or ') %}
@@ -55,16 +55,16 @@ e.state[{{ value }}]
     {%- endif %}
 {%- elif op == 'not in' -%}
     {% if value.is_range -%}
-        {% if value.exclude_lower -%}
-            {{ ref }} <= {{ _rhs_value(value.lower_bound) }}
+        {% if value.exclude_min -%}
+            {{ ref }} <= {{ _rhs_value(value.min_value) }}
         {%- else -%}
-            {{ ref }} < {{ _rhs_value(value.lower_bound) }}
+            {{ ref }} < {{ _rhs_value(value.min_value) }}
         {%- endif %}{# -#}
         {{ ' or ' }}{# -#}
-        {% if value.exclude_upper -%}
-            {{ ref }} >= {{ _rhs_value(value.upper_bound) }}
+        {% if value.exclude_max -%}
+            {{ ref }} >= {{ _rhs_value(value.max_value) }}
         {%- else -%}
-            {{ ref }} > {{ _rhs_value(value.upper_bound) }}
+            {{ ref }} > {{ _rhs_value(value.max_value) }}
         {%- endif %}
     {%- else -%}
         {% set disjoin = joiner(' and ') %}

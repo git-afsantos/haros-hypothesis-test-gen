@@ -25,11 +25,13 @@
 ################################################################################
 
 from builtins import range # Python 2 and 3: forward-compatible
+from collections import namedtuple
 
 from haros.hpl.hpl_ast import (
-    HplEvent, HplEventChain, HplChainDisjunction, HplFieldCondition,
-    HplFieldReference, HplValue, HplSet, HplRange, HplLiteral
+    HplEvent, HplValue #HplEventChain, HplChainDisjunction
 )
+
+from .util import convert_to_old_format
 
 
 ################################################################################
@@ -38,6 +40,25 @@ from haros.hpl.hpl_ast import (
 
 INF = float("inf")
 
+
+################################################################################
+# Data Structures
+################################################################################
+
+HplFieldCondition = namedtuple("HplFieldCondition",
+    ("field", "operator", "value"))
+
+FakeSet = namedtuple("HplSet", ("values", "is_set", "is_range"))
+
+FakeRange = namedtuple("HplRange",
+    ("min_value", "max_value", "exclude_min", "exclude_max",
+     "is_set", "is_range"))
+
+def fake_set(values):
+    return FakeSet(values, True, False)
+
+def fake_range(lob, upb, excl, excu):
+    return FakeRange(lob, upb, excl, excu, False, True)
 
 ################################################################################
 # Events
@@ -50,8 +71,7 @@ class EventTemplate(object):
                  "seq_timer", "is_leaf", "external_timer", "is_under_timer",
                  "is_activator", "is_terminator", "is_trigger", "is_behaviour",
                  "dependencies", "dep_conditions", "log_level", "log_gap",
-                 "log_age", "reads_state", "subsumes", "type_token",
-                 "length_conditions")
+                 "log_age", "reads_state", "subsumes", "type_token")
 
     def __init__(self, uid, event):
         self.uid = uid # tuple(string | int)
@@ -64,11 +84,11 @@ class EventTemplate(object):
         self.strategy = None # string
         self.delay = event.delay # float
         self.duration = event.duration # float
-        self.conditions = list(event.msg_filter.conditions)
+        conditions = convert_to_old_format(event.predicate.condition)
+        self.conditions = [HplFieldCondition(c.operand1, c.operator, c.operand2)
+                           for c in conditions)
         # ^ [HplFieldCondition]
         self.dep_conditions = {} # {tuple(event key): [HplFieldCondition]}
-        self.length_conditions = list(event.msg_filter.length_conditions)
-        # ^ [HplFieldCondition]
         self.ref_count = 0 # int    references to this event
         self.forks = [] # [EventTemplate]
         self.dependencies = [] # [EventTemplate]
@@ -106,7 +126,7 @@ class EventTemplate(object):
 
     @property
     def has_conditions(self):
-        return bool(self.conditions or self.length_conditions)
+        return bool(self.conditions)
 
     @property
     def msg_type(self):
@@ -132,29 +152,6 @@ class EventTemplate(object):
     def get_dep_conditions(self, key):
         return self.dep_conditions.get(key, [])
 
-    def add_min_length_condition(self, field_token, min_length):
-        for condition in self.length_conditions:
-            if condition.field.token != field_token:
-                continue
-            if not condition.value.is_literal:
-                continue
-            if condition.operator != ">" and condition.operator != ">=":
-                continue
-            if condition.value.value >= min_length:
-                return
-            if condition.operator == ">":
-                hpl_value = HplLiteral(str(min_length - 1), min_length - 1)
-                condition.value = hpl_value
-            else:
-                assert condition.operator == ">="
-                hpl_value = HplLiteral(str(min_length), min_length)
-                condition.value = hpl_value
-            return
-        field_ref = HplFieldReference(field_token)
-        hpl_value = HplLiteral(str(min_length), min_length)
-        c = HplFieldCondition(field_ref, ">=", hpl_value)
-        self.length_conditions.append(c)
-
     def _set_class_name(self):
         parts = [str(i) for i in self.uid]
         parts.append("Listener")
@@ -169,10 +166,19 @@ class CompositeEventTemplate(object):
         self.events = []
         self.roots = []
         self.leaves = []
-        if isinstance(top_level_event, HplChainDisjunction):
-            self._build_from_disjunction(top_level_event)
-        else:
-            raise TypeError(top_level_event)
+        #if isinstance(top_level_event, HplChainDisjunction):
+        #    self._build_from_disjunction(top_level_event)
+        #else:
+        #    raise TypeError(top_level_event)
+
+        # ---- glue code for new language version ----
+        new_uid = uid + (1,)
+        event = EventTemplate(new_uid, top_level_event)
+        self.events.append(event)
+        self.roots.append(event)
+        event.is_root = True
+        self.leaves.append(event)
+        event.is_leaf = True
 
     def _build_from_disjunction(self, disjunction):
         assert len(disjunction.chains) >= 1
@@ -224,7 +230,8 @@ class SubscriberTemplate(object):
 class MonitorTemplate(object):
     __slots__ = ("index", "uid", "class_name", "is_liveness", "is_safety",
                  "events", "subs", "aliases", "activator", "terminator",
-                 "trigger", "behaviour", "scope_timeout", "hpl_string")
+                 "trigger", "behaviour", "scope_timeout", "hpl_string",
+                 "is_prevention")
 
     _n = 0
 
@@ -238,9 +245,13 @@ class MonitorTemplate(object):
         self.class_name = "Monitor" + self.index # string
         self.is_liveness = hpl_property.is_liveness # bool
         self.is_safety = hpl_property.is_safety # bool
+        self.is_prevention = hpl_property.pattern.is_prevention # bool
         self.events = [] # [EventTemplate]
         self.aliases = {} # {string (alias): EventTemplate}
-        self.scope_timeout = hpl_property.scope.timeout
+        if hpl_property.pattern.is_absence or hpl_property.pattern.is_existence:
+            self.scope_timeout = hpl_property.pattern.max_time
+        else:
+            self.scope_timeout = INF
         self._set_events(hpl_property)
         self._annotate_events(pubbed_topics, subbed_topics)
         self.subs = self._make_subs(hpl_property, pubbed_topics, subbed_topics)
@@ -255,23 +266,23 @@ class MonitorTemplate(object):
         return self.scope_timeout < INF
 
     def _set_events(self, hpl_property):
+        scope = hpl_property.scope
+        pattern = hpl_property.pattern
         self.activator = None # CompositeEventTemplate
-        if hpl_property.scope.activator is not None:
-            self._set_activator(hpl_property.scope.activator)
+        if scope.activator is not None:
+            self._set_activator(scope.activator)
         self.trigger = None # CompositeEventTemplate
-        req = hpl_property.observable.is_requirement
-        if hpl_property.observable.trigger is not None:
-            self._set_trigger(hpl_property.observable.trigger)
-        self._set_behaviour(hpl_property.observable.behaviour, req=req)
+        req = pattern.is_requirement
+        if pattern.trigger is not None:
+            self._set_trigger(pattern.trigger)
+        self._set_behaviour(pattern.behaviour, req=req)
         if req:
-            self._process_requirement(hpl_property.observable.min_time,
-                                      hpl_property.observable.max_time)
-        elif hpl_property.observable.is_response:
-            self._process_response(hpl_property.observable.min_time,
-                                   hpl_property.observable.max_time)
+            self._process_requirement(pattern.min_time, pattern.max_time)
+        elif pattern.is_response or pattern.is_prevention:
+            self._process_response(pattern.min_time, pattern.max_time)
         self.terminator = None # CompositeEventTemplate
-        if hpl_property.scope.terminator is not None:
-            self._set_terminator(hpl_property.scope.terminator)
+        if scope.terminator is not None:
+            self._set_terminator(scope.terminator)
         self._link_events()
 
     def _set_activator(self, top_level_event):
@@ -330,15 +341,33 @@ class MonitorTemplate(object):
                 self._random_alias(event)
             for i in range(len(event.conditions) - 1, -1, -1):
                 c = event.conditions[i]
-                if c.is_invertible:
-                    value = c.value
-                    assert value.is_reference
-                    if value.message is not None:
-                        source = self.aliases[value.message]
-                        if source.is_behaviour:
-                            del event.conditions[i]
-                            c = c.inverted(event.alias)
-                            source.conditions.append(c)
+                value = c.value
+                if value.is_accessor and value.base_message().is_variable:
+                    # FIXME does not work for ranges and sets
+                    alias = value.base_message().name
+                    source = self.aliases[value.message]
+                    if source.is_behaviour:
+                        del event.conditions[i]
+                        if c.operator == "=":
+                            source.conditions.append(HplFieldCondition(
+                                value, "=", c.field))
+                        elif c.operator == "!=":
+                            source.conditions.append(HplFieldCondition(
+                                value, "!=", c.field))
+                        elif c.operator == "<":
+                            source.conditions.append(HplFieldCondition(
+                                value, ">", c.field))
+                        elif c.operator == "<=":
+                            source.conditions.append(HplFieldCondition(
+                                value, ">=", c.field))
+                        elif c.operator == ">":
+                            source.conditions.append(HplFieldCondition(
+                                value, "<", c.field))
+                        elif c.operator == ">=":
+                            source.conditions.append(HplFieldCondition(
+                                value, "<=", c.field))
+                        else:
+                            assert False, "operator: " + c.operator
 
     def _process_response(self, delay, duration):
         if duration < INF:
@@ -357,13 +386,13 @@ class MonitorTemplate(object):
             else:
                 for event in self.activator.leaves:
                     event.forks.extend(self.trigger.roots)
-            if self.is_safety:
+            if self.is_safety and not self.is_prevention:
                 for event in self.activator.leaves:
                     event.forks.extend(self.behaviour.roots)
             if self.terminator is not None:
                 for event in self.activator.leaves:
                     event.forks.extend(self.terminator.roots)
-        if self.trigger is not None and self.is_liveness:
+        if self.trigger is not None and (self.is_liveness or self.is_prevention):
             for event in self.trigger.leaves:
                 event.forks.extend(self.behaviour.roots)
 
@@ -374,31 +403,31 @@ class MonitorTemplate(object):
             b = event.is_behaviour
             for i in range(len(event.conditions) - 1, -1, -1):
                 c = event.conditions[i]
-                value = c.value
-                if value.is_reference:
+                if c.value.is_accessor:
                     var_count += self._var_substitution(event, i, c.field,
-                        c.operator, value, var_count, s, b)
-                elif value.is_set:
+                        c.operator, c.value, var_count, s, b)
+                elif c.value.is_set:
                     var_count += self._set_substitution(event, i, c.field,
-                        c.operator, value, var_count, s, b)
-                elif value.is_range:
+                        c.operator, c.value, var_count, s, b)
+                elif c.value.is_range:
                     var_count += self._range_substitution(event, i, c.field,
-                        c.operator, value, var_count, s, b)
+                        c.operator, c.value, var_count, s, b)
 
     def _var_substitution(self, event, i, field, op, value, var_count, s, b):
-        assert not value.is_multi_field, "not yet implemented"
         inc = 0
-        if value.message is not None:
-            source = self.aliases[value.message]
+        msg = value.base_message()
+        if msg.is_variable:
+            source = self.aliases[msg.name]
             source.ref_count += 1
-            logged = s and b and source.is_trigger
+            logged = s and b and source.is_trigger and not self.is_prevention
+            token = str(value)
             for j, field_ref in source.saved_vars.iteritems():
-                if field_ref == value.token:
+                if field_ref == token:
                     var = _VariableSubstitution(j, ext=logged)
                     break
             else:
                 var = _VariableSubstitution(var_count, ext=logged)
-                source.saved_vars[var_count] = value.token
+                source.saved_vars[var_count] = token
                 inc += 1
             new_cond = HplFieldCondition(field, op, var)
             if logged:
@@ -416,28 +445,29 @@ class MonitorTemplate(object):
         logged = False
         replace = False
         for value in hpl_set.values:
-            if not value.is_reference:
+            if not value.is_accessor:
                 new_values.append(value)
                 continue
-            assert not value.is_multi_field, "not yet implemented"
-            if value.message is not None:
+            msg = value.base_message()
+            if msg.is_variable:
                 replace = True
-                source = self.aliases[value.message]
+                source = self.aliases[msg.name]
                 source.ref_count += 1
-                logged = logged or (s and b and source.is_trigger)
+                logged = logged or (s and b and source.is_trigger and not self.is_prevention)
+                token = str(value)
                 for j, field_ref in source.saved_vars.iteritems():
-                    if field_ref == value.token:
+                    if field_ref == token:
                         var = _VariableSubstitution(j, ext=logged)
                         break
                 else:
                     var = _VariableSubstitution(var_count, ext=logged)
-                    source.saved_vars[var_count] = value.token
+                    source.saved_vars[var_count] = token
                     inc += 1
                 new_values.append(var)
             else:
                 new_values.append(value)
         if replace:
-            new_cond = HplFieldCondition(field, op, HplSet(new_values))
+            new_cond = HplFieldCondition(field, op, fake_set(new_values))
             if logged:
                 for leaf in self.trigger.leaves:
                     leaf.log_level = 2
@@ -452,30 +482,31 @@ class MonitorTemplate(object):
         new_values = []
         logged = False
         replace = False
-        for value in (hran.lower_bound, hran.upper_bound):
-            if not value.is_reference:
+        for value in (hran.min_value, hran.max_value):
+            if not value.is_accessor:
                 new_values.append(value)
                 continue
-            assert not value.is_multi_field, "not yet implemented"
-            if value.message is not None:
+            msg = value.base_message()
+            if msg.is_variable:
                 replace = True
-                source = self.aliases[value.message]
+                source = self.aliases[msg.name]
                 source.ref_count += 1
-                logged = logged or (s and b and source.is_trigger)
+                logged = logged or (s and b and source.is_trigger and not self.is_prevention)
+                token = str(value)
                 for j, field_ref in source.saved_vars.iteritems():
-                    if field_ref == value.token:
+                    if field_ref == token:
                         var = _VariableSubstitution(j, ext=logged)
                         break
                 else:
                     var = _VariableSubstitution(var_count, ext=logged)
-                    source.saved_vars[var_count] = value.token
+                    source.saved_vars[var_count] = token
                     inc += 1
                 new_values.append(var)
             else:
                 new_values.append(value)
         if replace:
-            new_range = HplRange(new_values[0], new_values[1],
-                exc_lower=hran.exclude_lower, exc_upper=hran.exclude_upper)
+            new_range = fake_range(new_values[0], new_values[1],
+                hran.exclude_min, hran.exclude_max)
             new_cond = HplFieldCondition(field, op, new_range)
             if logged:
                 for leaf in self.trigger.leaves:
@@ -557,60 +588,3 @@ class _VariableSubstitution(HplValue):
 
     def __repr__(self):
         return "{}({})".format(type(self).__name__, repr(self.variable))
-
-
-################################################################################
-# Main Function
-################################################################################
-
-def example():
-    e1 = Event.publish("e1", "topic", delay=0.5, duration=0.5)
-    e2 = Event.publish("e2", "topic")
-    e3 = Event.publish("e3", "topic")
-    e4 = Event.publish("e4", "topic")
-    e5 = Event.publish("e5", "topic")
-    e6 = Event.publish("e6", "topic")
-    # ------------------------
-    d1 = EventDisjunction()
-    d2 = EventDisjunction()
-    # ------------------------
-    c1 = EventChain(duration=10.0)
-    c2 = EventChain()
-    c3 = EventChain()
-    c4 = EventChain()
-    c5 = EventChain()
-    # ------------------------
-    c1.events.append(e1)
-    c1.events.append(e2)
-    c1.events.append(d1)
-    d1.chains.append(c2)
-    d1.chains.append(c5)
-    c2.events.append(e3)
-    c2.events.append(d2)
-    d2.chains.append(c3)
-    d2.chains.append(c4)
-    c3.events.append(e4)
-    c4.events.append(e5)
-    c5.events.append(e6)
-    # ------------------------
-    builder = EventChainTemplate((), c1)
-    for i in range(len(builder.events)):
-        builder.events[i].var_name = "_e_" + str(i + 1)
-    print "# EVENTS"
-    for e in builder.events:
-        print "[uid]", e.uid
-        print "[name]", e.name
-        print "[var]", e.var_name
-        print "[delay]", e.delay
-        print "[duration]", e.duration
-        print "[forks]", tuple(se.name for se in e.forks)
-        print ""
-    print "# ROOTS"
-    print tuple(e.name for e in builder.roots)
-    print ""
-    print "# LEAVES"
-    print tuple(e.name for e in builder.leaves)
-
-
-if __name__ == "__main__":
-    example()

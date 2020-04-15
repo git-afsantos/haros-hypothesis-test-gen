@@ -196,9 +196,27 @@ def all_except(array, exclude):
 {# Strategies = ("stages", "activator", "trigger") #}
 {# stages = (topic -> strategy (random msg)) #}
 {# MsgStrategy = ("name", "args", "pkg", "msg", "statements", "is_default") #}
-{% for entry in custom_strategies %}
+{% for entry in strategy_map %}
+    {% for stage in entry.stages %}
+        {% for st in stage.values() %}
+            {% if not st.is_default %}
 
-{{ strats.custom_msg(entry) }}
+{{ strats.custom_msg(st) }}
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+    {% if entry.activator is not None %}
+        {% if not entry.activator.is_default %}
+
+{{ strats.custom_msg(entry.activator) }}
+        {% endif %}
+    {% endif %}
+    {% if entry.trigger is not None %}
+        {% if not entry.trigger.is_default %}
+
+{{ strats.custom_msg(entry.trigger) }}
+        {% endif %}
+    {% endif %}
 {% endfor %}
 
 ################################################################################
