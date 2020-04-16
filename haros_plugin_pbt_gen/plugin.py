@@ -30,9 +30,7 @@ from collections import namedtuple
 from itertools import chain as iterchain
 import os
 
-from haros.hpl.hpl_ast import (
-    HplVacuousTruth, HplBinaryOperator, HplLiteral, HplUnaryOperator
-)
+from haros.hpl.hpl_ast import HplVacuousTruth
 from haros.hpl.ros_types import get_type # FIXME
 from jinja2 import Environment, PackageLoader
 
@@ -63,7 +61,7 @@ config_num = 0
 
 def configuration_analysis(iface, config):
     if (not config.launch_commands or not config.nodes.enabled
-            or not config.hpl_properties:):
+            or not config.hpl_properties):
         return
     settings = config.user_attributes.get(KEY, EMPTY_DICT)
     _validate_settings(iface, settings)
@@ -414,8 +412,8 @@ class StrategyBuilder(object):
         self.counter += 1
         name = "{}{}_{}_{}".format(
             fun_name, self.counter, rostype.package, rostype.message)
-        return MsgStrategy(name, strategy.args, type_token.package,
-                           type_token.message, strategy.build(), False)
+        return MsgStrategy(name, strategy.args, rostype.package,
+                           rostype.message, strategy.build(), False)
 
     def _default_strategy(self, rostype):
         assert rostype.is_message
@@ -427,7 +425,8 @@ class StrategyBuilder(object):
                     continue
                 if type_token.is_time or type_token.is_duration:
                     continue
-                if type_token.is_array or type_token.type_name in strategies:
+                if (type_token.is_array
+                        or type_token.type_name in self.default_strategies):
                     continue
                 self.pkg_imports.add(type_token.package)
                 self.default_strategies[type_token.type_name] = type_token
@@ -447,7 +446,10 @@ class StrategyBuilder(object):
 
     def _set_condition(self, strategy, condition, type_token):
         selector = Selector(str(condition.operand1), type_token)
-        value = self._value(condition.operand2, strategy, type_token)
+        try:
+            value = self._value(condition.operand2, strategy, type_token)
+        except KeyError:
+            return
         if condition.operator == "=":
             strategy.set_eq(selector, value)
         elif condition.operator == "!=":
@@ -641,16 +643,16 @@ class Stage2Builder(StrategyBuilder):
         terminator = prop.scope.terminator
         if prop.pattern.behaviour.topic in self.topics:
             raise StrategyError("topic '{}' is not advertised".format(topic))
+        activator = prop.scope.activator
+        if activator is not None and activator.alias is not None:
+            rostype, assumed = self.topics.get(activator.topic)
+            self.types_by_message[activator.alias] = rostype
         if prop.pattern.is_requirement:
             assert trigger is not None
             self._build_randoms(trigger, terminator)
         else:
             if prop.pattern.is_response and prop.pattern.is_prevention:
                 assert trigger is not None
-                activator = prop.scope.activator
-                if activator is not None and activator.alias is not None:
-                    rostype, assumed = self.topics.get(activator.topic)
-                    self.types_by_message[activator.alias] = rostype
                 self._build_trigger(trigger, terminator)
             self._build_randoms(None, terminator)
 

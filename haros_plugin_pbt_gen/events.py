@@ -82,11 +82,14 @@ class EventTemplate(object):
         self.topic = event.topic # string
         self.type_token = None # TypeToken
         self.strategy = None # string
-        self.delay = event.delay # float
-        self.duration = event.duration # float
-        conditions = convert_to_old_format(event.predicate.condition)
+        self.delay = 0.0 # float
+        self.duration = INF # float
+        if event.predicate.is_vacuous:
+            conditions = []
+        else:
+            conditions = convert_to_old_format(event.predicate.condition)
         self.conditions = [HplFieldCondition(c.operand1, c.operator, c.operand2)
-                           for c in conditions)
+                           for c in conditions]
         # ^ [HplFieldCondition]
         self.dep_conditions = {} # {tuple(event key): [HplFieldCondition]}
         self.ref_count = 0 # int    references to this event
@@ -345,7 +348,7 @@ class MonitorTemplate(object):
                 if value.is_accessor and value.base_message().is_variable:
                     # FIXME does not work for ranges and sets
                     alias = value.base_message().name
-                    source = self.aliases[value.message]
+                    source = self.aliases[alias]
                     if source.is_behaviour:
                         del event.conditions[i]
                         if c.operator == "=":
