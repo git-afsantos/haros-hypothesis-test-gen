@@ -31,7 +31,7 @@ from haros.hpl.hpl_ast import (
     HplEvent, HplValue #HplEventChain, HplChainDisjunction
 )
 
-from .util import convert_to_old_format, fake_set, fake_range
+from .util import convert_to_old_format, fake_set, fake_range, replace_base_msg
 
 
 ################################################################################
@@ -334,30 +334,33 @@ class MonitorTemplate(object):
             for i in range(len(event.conditions) - 1, -1, -1):
                 c = event.conditions[i]
                 value = c.value
+                field = c.field
                 if value.is_accessor and value.base_message().is_variable:
                     # FIXME does not work for ranges and sets
                     alias = value.base_message().name
                     source = self.aliases[alias]
                     if source.is_behaviour:
                         del event.conditions[i]
+                        field = replace_base_msg(field, repl=event.alias)
+                        value = replace_base_msg(value)
                         if c.operator == "=":
                             source.conditions.append(HplFieldCondition(
-                                value, "=", c.field))
+                                value, "=", field))
                         elif c.operator == "!=":
                             source.conditions.append(HplFieldCondition(
-                                value, "!=", c.field))
+                                value, "!=", field))
                         elif c.operator == "<":
                             source.conditions.append(HplFieldCondition(
-                                value, ">", c.field))
+                                value, ">", field))
                         elif c.operator == "<=":
                             source.conditions.append(HplFieldCondition(
-                                value, ">=", c.field))
+                                value, ">=", field))
                         elif c.operator == ">":
                             source.conditions.append(HplFieldCondition(
-                                value, "<", c.field))
+                                value, "<", field))
                         elif c.operator == ">=":
                             source.conditions.append(HplFieldCondition(
-                                value, "<=", c.field))
+                                value, "<=", field))
                         else:
                             assert False, "operator: " + c.operator
 

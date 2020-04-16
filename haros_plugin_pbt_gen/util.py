@@ -27,7 +27,10 @@
 
 from collections import namedtuple
 
-from haros.hpl.hpl_ast import HplBinaryOperator, HplLiteral, HplUnaryOperator
+from haros.hpl.hpl_ast import (
+    HplBinaryOperator, HplLiteral, HplUnaryOperator, HplFieldAccess,
+    HplArrayAccess, HplThisMessage, HplVarReference
+)
 
 
 ###############################################################################
@@ -215,3 +218,33 @@ def convert_to_old_format(phi):
                 else:
                     raise StrategyError("operators are not implemented")
     return conditions
+
+
+def replace_base_msg(accessor, repl=None):
+    assert accessor.is_accessor
+    stack = []
+    obj = accessor
+    while not obj.is_value and obj.is_accessor:
+        stack.append(obj)
+        obj = obj.message
+    assert obj.is_value
+    if obj.is_this_msg:
+        if repl is None:
+            return accessor
+        obj = HplVarReference("@" + repl)
+    else:
+        assert obj.is_variable
+        if repl is None:
+            obj = HplThisMessage()
+        else:
+            if repl == obj.name:
+                return accessor
+            obj = HplVarReference("@" + repl)
+    while stack:
+        op = stack.pop()
+        if op.is_field:
+            obj = HplFieldAccess(obj, op.field)
+        else:
+            assert op.is_indexed
+            obj = HplArrayAccess(obj, op.index)
+    return obj
