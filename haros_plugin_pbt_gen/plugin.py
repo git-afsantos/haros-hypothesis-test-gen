@@ -39,7 +39,7 @@ from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
 )
 from .selectors import Selector
-from .util import convert_to_old_format
+from .util import StrategyError, convert_to_old_format
 
 
 ###############################################################################
@@ -102,10 +102,6 @@ MsgStrategy = namedtuple("MsgStrategy",
 
 
 class SpecError(Exception):
-    pass
-
-
-class StrategyError(Exception):
     pass
 
 
@@ -302,7 +298,7 @@ class TestGenerator(object):
             "events": tuple(e for m in all_monitors for e in m.events),
             "main_monitor": test_case.monitor,
             "monitors": all_monitors,
-            "default_strategies": self.strategies.default_strategies,
+            "default_strategies": self.strategies.default_strategies.values(),
             "strategy_map": test_case.strategy_map,
             "publishers": test_case.publishers,
             "subscribers": test_case.subscribers,

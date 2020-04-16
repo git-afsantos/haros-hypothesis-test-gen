@@ -31,7 +31,7 @@ from haros.hpl.hpl_ast import (
     HplEvent, HplValue #HplEventChain, HplChainDisjunction
 )
 
-from .util import convert_to_old_format
+from .util import convert_to_old_format, fake_set, fake_range
 
 
 ################################################################################
@@ -48,17 +48,6 @@ INF = float("inf")
 HplFieldCondition = namedtuple("HplFieldCondition",
     ("field", "operator", "value"))
 
-FakeSet = namedtuple("HplSet", ("values", "is_set", "is_range"))
-
-FakeRange = namedtuple("HplRange",
-    ("min_value", "max_value", "exclude_min", "exclude_max",
-     "is_set", "is_range"))
-
-def fake_set(values):
-    return FakeSet(values, True, False)
-
-def fake_range(lob, upb, excl, excu):
-    return FakeRange(lob, upb, excl, excu, False, True)
 
 ################################################################################
 # Events

@@ -205,13 +205,13 @@ def all_except(array, exclude):
             {% endif %}
         {% endfor %}
     {% endfor %}
-    {% if entry.activator is not None %}
+    {% if entry.activator %}
         {% if not entry.activator.is_default %}
 
 {{ strats.custom_msg(entry.activator) }}
         {% endif %}
     {% endif %}
-    {% if entry.trigger is not None %}
+    {% if entry.trigger %}
         {% if not entry.trigger.is_default %}
 
 {{ strats.custom_msg(entry.trigger) }}
