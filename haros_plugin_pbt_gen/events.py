@@ -412,7 +412,7 @@ class MonitorTemplate(object):
             source = self.aliases[msg.name]
             source.ref_count += 1
             logged = s and b and source.is_trigger and not self.is_prevention
-            token = str(value)
+            token = str(value).split(".", 1)[-1]
             for j, field_ref in source.saved_vars.iteritems():
                 if field_ref == token:
                     var = _VariableSubstitution(j, ext=logged)
@@ -446,7 +446,7 @@ class MonitorTemplate(object):
                 source = self.aliases[msg.name]
                 source.ref_count += 1
                 logged = logged or (s and b and source.is_trigger and not self.is_prevention)
-                token = str(value)
+                token = str(value).split(".", 1)[-1]
                 for j, field_ref in source.saved_vars.iteritems():
                     if field_ref == token:
                         var = _VariableSubstitution(j, ext=logged)
@@ -484,7 +484,7 @@ class MonitorTemplate(object):
                 source = self.aliases[msg.name]
                 source.ref_count += 1
                 logged = logged or (s and b and source.is_trigger and not self.is_prevention)
-                token = str(value)
+                token = str(value).split(".", 1)[-1]
                 for j, field_ref in source.saved_vars.iteritems():
                     if field_ref == token:
                         var = _VariableSubstitution(j, ext=logged)

@@ -18,15 +18,17 @@
 ###############################################################################}
 
 {% macro _rhs_value(value) %}
-{% if value.is_literal -%}
-    {{ value.value }}
-{%- elif value.is_reference -%}
+{% if not value.is_value and value.is_accessor -%}
 msg.{{ value }}
-{%- elif value.is_variable -%}
-    {% if value.external -%}
+{%- elif value.is_value -%}
+    {% if value.is_literal -%}
+{{ value.value }}
+    {%- elif value.is_variable -%}
+        {% if value.external -%}
 entry.state[{{ value }}]
-    {%- else -%}
+        {%- else -%}
 e.state[{{ value }}]
+        {%- endif %}
     {%- endif %}
 {%- endif %}
 {% endmacro %}
@@ -104,7 +106,11 @@ e.state[{{ value }}]
 all({{ _field_clause(ref, condition.operator, condition.value) }} {# -#}
     {{ ns.py|join(' ') }})
 {%- else -%}
-    {% set ref = 'msg.' ~ condition.field -%}
+    {% if condition.field.base_message().is_variable -%}
+        {% set ref = 'msg.' ~ (condition.field|string).split('.', 1)[-1] -%}
+    {%- else -%}
+        {% set ref = 'msg.' ~ condition.field -%}
+    {%- endif -%}
     {% if fun -%}
         {%- set ref = fun ~ '(' ~ ref ~ ')' -%}
     {%- endif -%}
@@ -115,12 +121,6 @@ all({{ _field_clause(ref, condition.operator, condition.value) }} {# -#}
 
 {% macro _inline_conditions(conditions) %}
 {% for condition in conditions %} and {{ _field_condition(condition) }}{# -#}
-{% endfor %}
-{% endmacro %}
-
-{% macro _length_conditions(event) %}
-{% for condition in event.length_conditions %} and {# -#}
-{{ _field_condition(condition, fun='len') }}{# -#}
 {% endfor %}
 {% endmacro %}
 
@@ -222,7 +222,6 @@ class {{ event.class_name }}(EventListener):
         timed_out = 0
         {% if not event.reads_state %}
         condition = True{# -#}
-            {{ _length_conditions(event) }}{# -#}
             {{ _inline_conditions(event.conditions) }}
         {% endif %}
         i = len(self.active) - 1
@@ -233,7 +232,6 @@ class {{ event.class_name }}(EventListener):
                 timed_out += ((not e.subsumed and not e.matches) and 1) or 0
             {% if event.reads_state %}
             elif time >= e.min_time{# -#}
-                {{ _length_conditions(event) }}{# -#}
                 {{ _inline_conditions(event.conditions) }}:
                 {% if event.dependencies %}
 {{ _check_dep_log(event)|indent(width=16, first=true) }}
