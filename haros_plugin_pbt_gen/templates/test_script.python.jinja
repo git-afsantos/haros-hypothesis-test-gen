@@ -27,7 +27,7 @@
 
 # ---- TEST CASE STRUCTURE (PROPERTY MONITOR) ----
 
-#         trigger          terminus
+#        activator         terminator
 #            |                 |
 # launch     +-----------------+     timeout
 #   >--------| // behaviour // |--------<
@@ -39,30 +39,11 @@
 #   - liveness: at least one observable action eventually matches the pattern.
 #   - safety: all observable actions (if any) match the pattern.
 
-# Trigger - Event that marks the start of the monitoring interval.
+# Activator - Event that marks the start of the monitoring interval.
 #   - launch: event that marks the start of the test case (default).
-#   - receive: when the SUT receives a message matching a pattern.
-#   - publish: when the SUT publishes a message matching a pattern.
-#   - {event} and {event}: when both events happen.
-#   - {event} or {event}: when either event happens.
-#   - {event} then {event}: when both events happen in order.
 
-# Terminus - Event that marks the end of the monitoring interval.
+# Terminator - Event that marks the end of the monitoring interval.
 #   - timeout: event that marks the timeout of the test case (default).
-#   - receive: when the SUT receives a message matching a pattern.
-#              [incompatible with liveness behaviour, must ensure
-#               enough time for the SUT to act]
-#   - publish: when the SUT publishes a message matching a pattern.
-#              [must include a timeout, to ensure tests terminate]
-
-# Trigger events start a timeout timer, even if more random messages
-# are generated afterwards.
-# If the terminus is the timeout itself, no additional action is needed.
-# If the terminus is a receive event (safety properties only), the timeout
-# is either ignored, and the test is controlled entirely by the generated
-# trace, or used to control the generation of the terminus message.
-# If the terminus is a publish event, the timeout is used to differentiate
-# between valid tests (publish happens) and invalid tests (timeout happens).
 
 
 # ---- TIMING ISSUES (FLAKY TESTS) ----
@@ -194,30 +175,29 @@ def all_except(array, exclude):
 ################################################################################
 
 {# Strategies = ("stages", "activator", "trigger") #}
-{# stages = (topic -> strategy (random msg)) #}
-{# MsgStrategy = ("name", "args", "pkg", "msg", "statements", "is_default") #}
-{% for entry in strategy_map %}
-    {% for stage in entry.stages %}
-        {% for st in stage.values() %}
-            {% if not st.is_default %}
+{# stages = [strategy (random msg)] x3 #}
+{# activator = strategy #}
+{# trigger = strategy #}
+{# MsgStrategy = ("name", "args", "pkg", "msg", "statements",
+                  "is_default", "topic", "alias") #}
+
+{% for stage in strategy_map.stages %}
+    {% for st in stage %}
+        {% if not st.is_default %}
 
 {{ strats.custom_msg(st) }}
-            {% endif %}
-        {% endfor %}
+        {% endif %}
     {% endfor %}
-    {% if entry.activator %}
-        {% if not entry.activator.is_default %}
-
-{{ strats.custom_msg(entry.activator) }}
-        {% endif %}
-    {% endif %}
-    {% if entry.trigger %}
-        {% if not entry.trigger.is_default %}
-
-{{ strats.custom_msg(entry.trigger) }}
-        {% endif %}
-    {% endif %}
 {% endfor %}
+{% if strategy_map.activator and not strategy_map.activator.is_default %}
+
+{{ strats.custom_msg(strategy_map.activator) }}
+{% endif %}
+{% if strategy_map.trigger and not strategy_map.trigger.is_default %}
+
+{{ strats.custom_msg(strategy_map.trigger) }}
+{% endif %}
+
 
 ################################################################################
 # Trace Strategies
@@ -257,11 +237,20 @@ class Chunk(object):
         return "Chunk(msgs={}, delay={})".format(
             repr(self.messages), self.delay)
 
-{% if main_monitor.is_liveness %}
-{{ strats.trace_strategy(main_monitor.activator, main_monitor.trigger, publishers) }}
-{% elif main_monitor.is_safety %}
-{{ strats.trace_strategy(main_monitor.activator, none, publishers) }}
-{% endif %}
+
+@strategies.composite
+def chunk_splits(draw, msgs):
+    cs = draw(strategies.lists(
+        strategies.builds(Chunk), min_size=1, max_size=len(msgs)))
+    n = len(cs)
+    i = 0
+    for msg in msgs:
+        cs[i].messages.append(msg)
+        i = (i + 1) % n
+    return cs
+
+
+{{ strats.trace_strategy(strategy_map) }}
 
 
 ################################################################################

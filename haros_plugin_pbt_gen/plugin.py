@@ -98,7 +98,8 @@ TestTemplate = namedtuple("TestTemplate", ("monitor", "strategy_map",
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
 MsgStrategy = namedtuple("MsgStrategy",
-    ("name", "args", "pkg", "msg", "statements", "is_default"))
+    ("name", "args", "pkg", "msg", "statements", "is_default",
+     "topic", "alias"))
 
 
 class SpecError(Exception):
@@ -322,7 +323,7 @@ class TestGenerator(object):
 # Strategy Building
 ################################################################################
 
-# stages: (topic -> strategy (random msg)) x3
+# stages: [strategy (random msg)] x3
 # activator: strategy for the activator event
 # trigger: strategy for the trigger event
 Strategies = namedtuple("Strategies", ("stages", "activator", "trigger"))
@@ -367,8 +368,17 @@ class StrategyManager(object):
         self.stage1.build(prop)
         self.stage2.build(prop)
         self.stage3.build(prop)
-        randoms = (self.stage1.strategies, self.stage2.strategies,
-                   self.stage3.strategies)
+        if prop.pattern.is_response or prop.pattern.is_prevention:
+            assert self.stage2.trigger is not None
+        else:
+            assert self.stage2.trigger is None
+        if prop.scope.activator is None:
+            assert self.stage1.activator is None
+        else:
+            assert self.stage1.activator is not None
+        randoms = (list(self.stage1.strategies.values()),
+                   list(self.stage2.strategies.values()),
+                   list(self.stage3.strategies.values()))
         return Strategies(randoms, self.stage1.activator, self.stage2.trigger)
 
     def _mapping(self, publishers, assumptions):
@@ -394,11 +404,11 @@ class StrategyBuilder(object):
         self.default_strategies = default_strategies
         self.pkg_imports = pkg_imports
 
-    def _build(self, rostype, phi, fun_name="cms"):
+    def _build(self, rostype, phi, topic=None, alias=None, fun_name="cms"):
         assert phi.is_predicate
         if phi.is_vacuous:
             if phi.is_true:
-                return self._default_strategy(rostype)
+                return self._default_strategy(rostype, topic=topic)
             else:
                 raise StrategyError("unsatisfiable predicate")
         # FIXME remove this and remake the strategy generator
@@ -409,9 +419,9 @@ class StrategyBuilder(object):
         name = "{}{}_{}_{}".format(
             fun_name, self.counter, rostype.package, rostype.message)
         return MsgStrategy(name, strategy.args, rostype.package,
-                           rostype.message, strategy.build(), False)
+            rostype.message, strategy.build(), False, topic, alias)
 
-    def _default_strategy(self, rostype):
+    def _default_strategy(self, rostype, topic=None):
         assert rostype.is_message
         if rostype.type_name not in self.default_strategies:
             stack = [rostype]
@@ -428,7 +438,7 @@ class StrategyBuilder(object):
                 self.default_strategies[type_token.type_name] = type_token
                 stack.extend(type_token.fields.values())
         return MsgStrategy(rostype.type_name.replace("/", "_"),
-            (), rostype.package, rostype.message, (), True)
+            (), rostype.package, rostype.message, (), True, topic, None)
 
     def _msg_generator(self, type_token, conditions):
         strategy = MessageStrategyGenerator(type_token)
@@ -605,7 +615,8 @@ class Stage1Builder(StrategyBuilder):
             raise StrategyError("cannot publish on topic '{}'".format(topic))
         rostype, assumed = self.topics.get(topic)
         phi = event.predicate.join(assumed)
-        self.activator = self._build(rostype, phi, fun_name="s1cs")
+        self.activator = self._build(
+            rostype, phi, topic=topic, alias=event.alias, fun_name="s1cs")
 
     def _build_randoms(self, event):
         for topic, data in self.topics.items():
@@ -618,10 +629,10 @@ class Stage1Builder(StrategyBuilder):
                     # cannot match activator
                     phi = phi.negate().join(assumed)
                     self.strategies[topic] = self._build(
-                        rostype, phi, fun_name="s1cs")
+                        rostype, phi, topic=topic, fun_name="s1cs")
             else: # random topic
                 self.strategies[topic] = self._build(
-                    rostype, assumed, fun_name="s1cs")
+                    rostype, assumed, topic=topic, fun_name="s1cs")
 
 
 class Stage2Builder(StrategyBuilder):
@@ -647,7 +658,7 @@ class Stage2Builder(StrategyBuilder):
             assert trigger is not None
             self._build_randoms(trigger, terminator)
         else:
-            if prop.pattern.is_response and prop.pattern.is_prevention:
+            if prop.pattern.is_response or prop.pattern.is_prevention:
                 assert trigger is not None
                 self._build_trigger(trigger, terminator)
             self._build_randoms(None, terminator)
@@ -662,7 +673,8 @@ class Stage2Builder(StrategyBuilder):
             if terminator.predicate.is_vacuous:
                 raise StrategyError("trigger and terminator on the same topic")
             phi = phi.join(terminator.predicate.negate())
-        self.trigger = self._build(rostype, phi, fun_name="s2cs")
+        self.trigger = self._build(
+            rostype, phi, topic=topic, alias=trigger.alias, fun_name="s2cs")
 
     def _build_randoms(self, trigger, terminator):
         for topic, data in self.topics.items():
@@ -682,7 +694,7 @@ class Stage2Builder(StrategyBuilder):
                             phi = phi.join(psi.negate())
                     phi = phi.join(assumed)
                     self.strategies[topic] = self._build(
-                        rostype, phi, fun_name="s2cs")
+                        rostype, phi, topic=topic, fun_name="s2cs")
             elif terminator and topic == terminator.topic:
                 phi = terminator.predicate
                 if phi.is_vacuous:
@@ -690,10 +702,10 @@ class Stage2Builder(StrategyBuilder):
                 else: # cannot match terminator
                     phi = phi.negate().join(assumed)
                     self.strategies[topic] = self._build(
-                        rostype, phi, fun_name="s2cs")
+                        rostype, phi, topic=topic, fun_name="s2cs")
             else: # random topic
                 self.strategies[topic] = self._build(
-                    rostype, assumed, fun_name="s2cs")
+                    rostype, assumed, topic=topic, fun_name="s2cs")
 
 
 class Stage3Builder(StrategyBuilder):
@@ -727,7 +739,7 @@ class Stage3Builder(StrategyBuilder):
                             phi = phi.join(psi.negate())
                     phi = phi.join(assumed)
                     self.strategies[topic] = self._build(
-                        rostype, phi, fun_name="s3cs")
+                        rostype, phi, topic=topic, fun_name="s3cs")
             elif terminator and topic == terminator.topic:
                 phi = terminator.predicate
                 if phi.is_vacuous:
@@ -735,7 +747,7 @@ class Stage3Builder(StrategyBuilder):
                 else: # cannot match terminator
                     phi = phi.negate().join(assumed)
                     self.strategies[topic] = self._build(
-                        rostype, phi, fun_name="s3cs")
+                        rostype, phi, topic=topic, fun_name="s3cs")
             else: # random topic
                 self.strategies[topic] = self._build(
-                    rostype, assumed, fun_name="s3cs")
+                    rostype, assumed, topic=topic, fun_name="s3cs")

@@ -42,8 +42,50 @@ for {{ statement.variable }} in {{ statement.expression }}:
 {% endmacro %}
 
 
+{# Builds a default message strategy for a given message type token.
+    Default strategies draw all values at random, without constraints. #}
+{% macro default_msg(ros_type) %}
+@strategies.composite
+def {{ _strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
+    msg = msg or {{ ros_type.package }}.{{ ros_type.message }}()
+    {% for field, type_token in ros_type.fields.items() %}
+    {% if type_token.is_array %}
+        {% if type_token.length is none %}
+    msg.{{ field }} = draw(strategies.lists({# -#}
+        {{ _type_to_strategy(type_token.type_name) }}()))
+        {% else %}
+    for i in range(len(msg.{{ field }})):
+        {{ _init_simple_field(field ~ '[i]', type_token.type_token) }}
+        {% endif %}
+    {% else %}
+    {{ _init_simple_field(field, type_token) }}
+    {% endif %}
+    {% endfor %}
+    return msg
+{% endmacro %}
+
+
+{# Builds a custom message strategy for a given package and message,
+    from a given list of statements. The statements determine which values
+    to assign to each field, as well as any additional constraints that
+    must be satisfied. #}
+{% macro custom_msg(strategy) %}
+@strategies.composite
+{% if strategy.args %}
+def {{ strategy.name }}(draw, {{ strategy.args|join(', ') }}):
+{% else %}
+def {{ strategy.name }}(draw):
+{% endif %}
+    msg = {{ strategy.pkg }}.{{ strategy.msg }}()
+{% for statement in strategy.statements %}
+{{ _statement(statement)|indent(width=4, first=True) }}
+{% endfor %}
+    return msg
+{% endmacro %}
+
+
 {##############################################################################
- # Test Trace Macros
+ # Trace Macros
  ##############################################################################}
 
 {# Transforms a sequence of events into a sequence of message chunks,
@@ -131,6 +173,73 @@ chunks.extend(main_chunks)
 {%- endmacro %}
 
 
+{% macro _stage_strategies(stage, main_strat, i) -%}
+# ----- Stage {{ i }} ----------------------------------------
+{% if stage %}
+all_msgs = []
+{% endif %}
+{% for st in stage %}
+    {% if st.is_default %}
+elems = {{ _strategy_name(st.pkg, st.msg) }}()
+    {% else %}
+elems = {{ st.name }}({{ st.args|join(', ') }})
+    {% endif %}
+msgs = draw(strategies.lists(elems, min_size=0, max_size=3))
+for msg in msgs:
+    all_msgs.append((msg, "{{ st.topic }}"))
+{% else %}
+# There are no strategies for random messages.
+{% endfor %}
+{% if stage %}
+if all_msgs:
+    r.shuffle(all_msgs)
+    chunks.extend(draw(chunk_splits(all_msgs)))
+    {% if main_strat %}
+else:
+    chunks.append(Chunk())
+    {% endif %}
+{% elif main_strat %}
+chunks.append(Chunk())
+{% endif %}
+{% if main_strat %}
+    {% if main_strat.is_default %}
+        {% set strat = _strategy_name(main_strat.pkg, main_strat.msg) %}
+        {% set args = '' %}
+    {% else %}
+        {% set strat = main_strat.name %}
+        {% set args = main_strat.args|join(', ') %}
+    {% endif %}
+msg = (draw({{ strat }}({{ args }})), "{{ main_strat.topic }}")
+    {% if main_strat.alias %}
+msg_{{ main_strat.alias }} = msg
+    {% endif %}
+chunks[-1].messages.append(msg)
+{% else %}
+# There is no target event to end this stage.
+{% endif %}
+{%- endmacro %}
+
+
+{# Builds a strategy to generate test traces in three stages.
+    A trace is, essentially, a list of message chunks, where each chunk
+    contains a delay, and a list of message-publisher pairs (of randomly
+    generated messages, using an appropriate strategy). #}
+{% macro trace_strategy(strategy_map) %}
+@strategies.composite
+def traces(draw):
+    chunks = []
+    r = draw(strategies.randoms())
+{{ _stage_strategies(strategy_map.stages[0], strategy_map.activator, 1)|indent(width=4, first=true) }}
+{{ _stage_strategies(strategy_map.stages[1], strategy_map.trigger, 2)|indent(width=4, first=true) }}
+{{ _stage_strategies(strategy_map.stages[2], none, 3)|indent(width=4, first=true) }}
+    return Trace(chunks)
+{% endmacro %}
+
+
+{##############################################################################
+ # Test Case Macros
+ ##############################################################################}
+
 {% macro _setup_sut(commands, nodes, settings) %}
 def _setup_sut(self):
     {% for cmd in commands %}
@@ -168,84 +277,6 @@ def _setup_sut(self):
         monitor.on_launch(self.launch_time)
 {% endmacro %}
 
-
-{##############################################################################
- # Public Macros
- ##############################################################################}
-
-{# Builds a default message strategy for a given message type token.
-    Default strategies draw all values at random, without constraints. #}
-{% macro default_msg(ros_type) %}
-@strategies.composite
-def {{ _strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
-    msg = msg or {{ ros_type.package }}.{{ ros_type.message }}()
-    {% for field, type_token in ros_type.fields.items() %}
-    {% if type_token.is_array %}
-        {% if type_token.length is none %}
-    msg.{{ field }} = draw(strategies.lists({# -#}
-        {{ _type_to_strategy(type_token.type_name) }}()))
-        {% else %}
-    for i in range(len(msg.{{ field }})):
-        {{ _init_simple_field(field ~ '[i]', type_token.type_token) }}
-        {% endif %}
-    {% else %}
-    {{ _init_simple_field(field, type_token) }}
-    {% endif %}
-    {% endfor %}
-    return msg
-{% endmacro %}
-
-
-{# Builds a custom message strategy for a given package and message,
-    from a given list of statements. The statements determine which values
-    to assign to each field, as well as any additional constraints that
-    must be satisfied. #}
-{% macro custom_msg(strategy) %}
-@strategies.composite
-{% if strategy.args %}
-def {{ strategy.name }}(draw, {{ strategy.args|join(', ') }}):
-{% else %}
-def {{ strategy.name }}(draw):
-{% endif %}
-    msg = {{ strategy.pkg }}.{{ strategy.msg }}()
-{% for statement in strategy.statements %}
-{{ _statement(statement)|indent(width=4, first=True) }}
-{% endfor %}
-    return msg
-{% endmacro %}
-
-
-{# Builds a strategy to generate test traces, given a trigger event sequence
-    (that can be None) and all available publishers for the test node.
-    A trace is, essentially, a list of message chunks, where each chunk
-    contains a delay, and a list of message-publisher pairs (of randomly
-    generated messages, using an appropriate strategy). #}
-{% macro trace_strategy(activator, trigger, pubs) %}
-@strategies.composite
-def traces(draw):
-    all_msgs = []
-    {% for pub in pubs %}
-        {% if pub.strategies %}
-    elems = {{ pub.strategies[-1].name }}()
-        {% else %}
-    elems = {{ _type_to_strategy(pub.type_token.type_name) }}()
-        {% endif %}
-    msgs = draw(strategies.lists(elems, min_size=0, max_size=3))
-    for msg in msgs:
-        all_msgs.append((msg, "{{ pub.topic }}"))
-    {% endfor %}
-    r = draw(strategies.randoms())
-    r.shuffle(all_msgs)
-    {% if trigger is none %}
-{{ _chunks_no_trigger()|indent(width=4, first=true) }}
-    {% else %}
-{{ _chunks_with_trigger(trigger)|indent(width=4, first=true) }}
-    {% endif %}
-    {% if activator %}
-{{ _chunks_for_activator(activator)|indent(width=4, first=true) }}
-    {% endif %}
-    return Trace(chunks)
-{% endmacro %}
 
 
 {# Builds the main test case class, which contains the main logic of the test.
