@@ -649,7 +649,8 @@ class Stage2Builder(StrategyBuilder):
         trigger = prop.pattern.trigger
         terminator = prop.scope.terminator
         if prop.pattern.behaviour.topic in self.topics:
-            raise StrategyError("topic '{}' is not advertised".format(topic))
+            raise StrategyError("topic '{}' is not advertised".format(
+                prop.pattern.behaviour.topic))
         activator = prop.scope.activator
         if activator is not None and activator.alias is not None:
             rostype, assumed = self.topics.get(activator.topic)
