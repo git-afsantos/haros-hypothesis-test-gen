@@ -204,10 +204,11 @@ def all_except(array, exclude):
 ################################################################################
 
 class Trace(object):
-    __slots__ = ("chunks",)
+    __slots__ = ("chunks", "terminator")
 
-    def __init__(self, chunks):
+    def __init__(self, chunks, terminator):
         self.chunks = chunks
+        self.terminator = terminator
 
     def __len__(self):
         return len(self.chunks)

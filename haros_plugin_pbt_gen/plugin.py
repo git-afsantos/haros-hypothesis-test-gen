@@ -326,7 +326,8 @@ class TestGenerator(object):
 # stages: [strategy (random msg)] x3
 # activator: strategy for the activator event
 # trigger: strategy for the trigger event
-Strategies = namedtuple("Strategies", ("stages", "activator", "trigger"))
+Strategies = namedtuple("Strategies",
+    ("stages", "activator", "trigger", "terminator"))
 
 
 # publisher stages:
@@ -339,7 +340,7 @@ Strategies = namedtuple("Strategies", ("stages", "activator", "trigger"))
 # only 'causes' and 'forbids' have trigger in stage 2
 
 class StrategyManager(object):
-    __slots__ = ("stage1", "stage2", "stage3")
+    __slots__ = ("stage1", "stage2", "stage3", "terminator")
 
     def __init__(self, pubs, assumptions):
         # pubs: topic -> ROS type token
@@ -351,6 +352,8 @@ class StrategyManager(object):
         self.stage1 = Stage1Builder(topics, default_strategies, pkg_imports)
         self.stage2 = Stage2Builder(topics, default_strategies, pkg_imports)
         self.stage3 = Stage3Builder(topics, default_strategies, pkg_imports)
+        self.terminator = TerminatorBuilder(topics,
+            default_strategies, pkg_imports)
 
     @property
     def default_strategies(self):
@@ -368,6 +371,7 @@ class StrategyManager(object):
         self.stage1.build(prop)
         self.stage2.build(prop)
         self.stage3.build(prop)
+        self.terminator.build(prop)
         if prop.pattern.is_response or prop.pattern.is_prevention:
             assert self.stage2.trigger is not None
         else:
@@ -376,10 +380,15 @@ class StrategyManager(object):
             assert self.stage1.activator is None
         else:
             assert self.stage1.activator is not None
+        if prop.scope.terminator is None:
+            assert self.terminator.terminator is None
+        else:
+            assert self.terminator.terminator is not None
         randoms = (list(self.stage1.strategies.values()),
                    list(self.stage2.strategies.values()),
                    list(self.stage3.strategies.values()))
-        return Strategies(randoms, self.stage1.activator, self.stage2.trigger)
+        return Strategies(randoms, self.stage1.activator, self.stage2.trigger,
+                          self.terminator.terminator)
 
     def _mapping(self, publishers, assumptions):
         r = {}
@@ -662,7 +671,9 @@ class Stage2Builder(StrategyBuilder):
             if prop.pattern.is_response or prop.pattern.is_prevention:
                 assert trigger is not None
                 self._build_trigger(trigger, terminator)
-            self._build_randoms(None, terminator)
+            #self._build_randoms(None, terminator)
+            # it seems that we want to avoid random triggers after all
+            self._build_randoms(trigger, terminator)
 
     def _build_trigger(self, trigger, terminator):
         topic = trigger.topic
@@ -752,3 +763,29 @@ class Stage3Builder(StrategyBuilder):
             else: # random topic
                 self.strategies[topic] = self._build(
                     rostype, assumed, topic=topic, fun_name="s3cs")
+
+
+class TerminatorBuilder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + ("topics", "terminator")
+
+    def __init__(self, topics, default_strategies, pkg_imports):
+        super(TerminatorBuilder, self).__init__(default_strategies, pkg_imports)
+        self.topics = topics
+        self.terminator = None
+
+    def build(self, prop):
+        self.terminator = None
+        if prop.scope.terminator is not None:
+            self._build_terminator(prop.scope.terminator)
+
+    def _build_terminator(self, terminator):
+        assert terminator is not None
+        topic = terminator.topic
+        rostype, assumed = self.topics[topic]
+        phi = terminator.predicate
+        if phi.is_vacuous:
+            phi = assumed
+        else:
+            phi = phi.join(assumed)
+        self.terminator = self._build(
+            rostype, phi, topic=topic, fun_name="tcs")

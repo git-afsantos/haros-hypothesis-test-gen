@@ -173,7 +173,7 @@ chunks.extend(main_chunks)
 {%- endmacro %}
 
 
-{% macro _stage_strategies(stage, main_strat, i) -%}
+{% macro _stage_strategies(stage, main_strat, i, allow_repeat=false) -%}
 # ----- Stage {{ i }} ----------------------------------------
 {% if stage %}
 all_msgs = []
@@ -214,6 +214,12 @@ msg = (draw({{ strat }}({{ args }})), "{{ main_strat.topic }}")
 msg_{{ main_strat.alias }} = msg
     {% endif %}
 chunks[-1].messages.append(msg)
+    {% if allow_repeat %}
+if r.random() < 0.5:
+    chunks.append(Chunk())
+    msg = (draw({{ strat }}({{ args }})), "{{ main_strat.topic }}")
+    chunks[-1].messages.append(msg)
+    {% endif %}
 {% else %}
 # There is no target event to end this stage.
 {% endif %}
@@ -230,9 +236,22 @@ def traces(draw):
     chunks = []
     r = draw(strategies.randoms())
 {{ _stage_strategies(strategy_map.stages[0], strategy_map.activator, 1)|indent(width=4, first=true) }}
-{{ _stage_strategies(strategy_map.stages[1], strategy_map.trigger, 2)|indent(width=4, first=true) }}
+{{ _stage_strategies(strategy_map.stages[1], strategy_map.trigger, 2, allow_repeat=true)|indent(width=4, first=true) }}
 {{ _stage_strategies(strategy_map.stages[2], none, 3)|indent(width=4, first=true) }}
-    return Trace(chunks)
+{% if strategy_map.terminator %}
+    {% if strategy_map.terminator.is_default %}
+        {% set strat = _strategy_name(strategy_map.terminator.pkg,
+                                      strategy_map.terminator.msg) %}
+        {% set args = '' %}
+    {% else %}
+        {% set strat = strategy_map.terminator.name %}
+        {% set args = strategy_map.terminator.args|join(', ') %}
+    {% endif %}
+    terminator = (draw({{ strat }}({{ args }})), "{{ strategy_map.terminator.topic }}")
+{% else %}
+    terminator = None
+{% endif %}
+    return Trace(chunks, terminator)
 {% endmacro %}
 
 
@@ -373,6 +392,21 @@ class TestTracer(unittest.TestCase):
                 {% endif %}
                 for msg, topic in chunk.messages:
                     self.pubs[topic].publish(msg)
+            {% if main_monitor.is_reentrant %}
+            rospy.sleep({{ main_monitor.time_to_reenter }})
+            for chunk in trace:
+                if chunk.delay:
+                    rospy.sleep(chunk.delay)
+                else:
+                    rate.sleep()
+                self._update()
+                {% if main_monitor.is_liveness %}
+                if self.main_monitor.at_least_once:
+                    return
+                {% endif %}
+                for msg, topic in chunk.messages:
+                    self.pubs[topic].publish(msg)
+            {% endif %}
             self.trace_done = True
             self._check_status()
             rate = rospy.Rate(10)
