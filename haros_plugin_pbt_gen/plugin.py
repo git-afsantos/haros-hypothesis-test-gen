@@ -92,7 +92,8 @@ def _validate_settings(iface, settings):
 PublisherTemplate = namedtuple("PublisherTemplate",
     ("topic", "type_token", "rospy_type"))
 
-TestTemplate = namedtuple("TestTemplate", ("monitor", "strategy_map",
+TestTemplate = namedtuple("TestTemplate", ("monitor", "custom_msg_strategies",
+    "trace_strategy",
     "publishers", "subscribers", "pkg_imports", "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
@@ -126,6 +127,14 @@ class TestGenerator(object):
                 self.iface.log_warning(
                     "Skipping untyped assumption:\n{}".format(p))
         self.strategies = StrategyManager(self.subbed_topics, assumptions)
+        self.jinja_env = Environment(
+            loader=PackageLoader(KEY, "templates"),
+            line_statement_prefix=None,
+            line_comment_prefix=None,
+            trim_blocks=True,
+            lstrip_blocks=True,
+            autoescape=False
+        )
 
     def make_tests(self, config_num):
         monitors, tests = self._make_monitors_and_tests()
@@ -200,11 +209,15 @@ class TestGenerator(object):
             all_monitors.append(monitor)
             try:
                 strategies = self.strategies.build_strategies(p)
+                py_custom_msgs = self._render_template(
+                    "custom_msg_strategies.python.jinja",
+                    strategies._asdict(), strip=True)
             except StrategyError as e:
                 self.iface.log_warning(
                     "Cannot produce a test for:\n'{}'\n\n{}".format(p, e))
             self._apply_slack(monitor)
-            tests.append(TestTemplate(monitor, strategies,
+            tests.append(TestTemplate(monitor, py_custom_msgs,
+                self._render_trace_strategy(p, strategies),
                 self._get_publishers(), self._get_subscribers(),
                 self.strategies.pkg_imports, monitor.hpl_string))
             monitor.variable_substitution()
@@ -300,7 +313,8 @@ class TestGenerator(object):
             "main_monitor": test_case.monitor,
             "monitors": all_monitors,
             "default_strategies": self.strategies.default_strategies.values(),
-            "strategy_map": test_case.strategy_map,
+            "custom_msg_strategies": test_case.custom_msg_strategies,
+            "trace_strategy": test_case.trace_strategy,
             "publishers": test_case.publishers,
             "subscribers": test_case.subscribers,
             "settings": self.settings,
@@ -318,16 +332,45 @@ class TestGenerator(object):
         os.chmod(filename, mode)
         self.iface.export_file(filename)
 
+    def _render_trace_strategy(self, prop, strategies):
+        data = strategies._asdict()
+        if prop.pattern.is_absence:
+            return self._render_template(
+                "trace_absence.python.jinja", data, strip=True)
+        elif prop.pattern.is_existence:
+            return self._render_template(
+                "trace_existence.python.jinja", data, strip=True)
+        elif prop.pattern.is_requirement:
+            return self._render_template(
+                "trace_precedence.python.jinja", data, strip=True)
+        elif prop.pattern.is_prevention:
+            return self._render_template(
+                "trace_prevention.python.jinja", data, strip=True)
+        elif prop.pattern.is_response:
+            return self._render_template(
+                "trace_response.python.jinja", data, strip=True)
+        else:
+            assert False, "unknown property pattern"
+
+    def _render_template(self, filename, data, strip=True):
+        template = self.jinja_env.get_template(filename)
+        text = template.render(**data).encode("utf-8")
+        if strip:
+            text = text.strip()
+        return text
+
 
 ################################################################################
 # Strategy Building
 ################################################################################
 
-# stages: [strategy (random msg)] x3
-# activator: strategy for the activator event
-# trigger: strategy for the trigger event
-Strategies = namedtuple("Strategies",
-    ("stages", "activator", "trigger", "terminator"))
+
+StrategyP = namedtuple("P", ("strategy", "spam"))
+StrategyQ = namedtuple("Q", ("strategy", "spam"))
+StrategyA = namedtuple("A", ("strategy", "spam", "min_num", "max_num"))
+StrategyB = namedtuple("B", ("spam", "timeout"))
+
+Strategies = namedtuple("Strategies", ("p", "q", "a", "b"))
 
 
 # publisher stages:
@@ -336,8 +379,7 @@ Strategies = namedtuple("Strategies",
 #   - stage 3 [0+ chunks]: after trigger (response and prevention)
 
 # 'globally' and 'until' do not have stage 1
-# only 'causes' and 'forbids' have stage 3
-# only 'causes' and 'forbids' have trigger in stage 2
+# only 'requires', 'causes' and 'forbids' have stage 2
 
 class StrategyManager(object):
     __slots__ = ("stage1", "stage2", "stage3", "terminator")
@@ -372,10 +414,24 @@ class StrategyManager(object):
         self.stage2.build(prop)
         self.stage3.build(prop)
         self.terminator.build(prop)
+        b_timeout = 1.0
+        a_min = 0
+        a_max = 0
         if prop.pattern.is_response or prop.pattern.is_prevention:
             assert self.stage2.trigger is not None
+            a_min = 1
+            a_max = 2
+            if prop.pattern.max_time < INF:
+                b_timeout = prop.pattern.max_time
+        elif prop.pattern.is_requirement:
+            assert self.stage2.trigger is not None
+            if prop.pattern.max_time < INF:
+                a_max = 2
+                b_timeout = prop.pattern.max_time
         else:
             assert self.stage2.trigger is None
+            if prop.pattern.max_time < INF:
+                b_timeout = prop.pattern.max_time
         if prop.scope.activator is None:
             assert self.stage1.activator is None
         else:
@@ -384,11 +440,14 @@ class StrategyManager(object):
             assert self.terminator.terminator is None
         else:
             assert self.terminator.terminator is not None
-        randoms = (list(self.stage1.strategies.values()),
-                   list(self.stage2.strategies.values()),
-                   list(self.stage3.strategies.values()))
-        return Strategies(randoms, self.stage1.activator, self.stage2.trigger,
-                          self.terminator.terminator)
+        p = StrategyP(self.stage1.activator,
+            list(self.stage1.strategies.values()))
+        q = StrategyQ(self.terminator.terminator,
+            list(self.stage3.strategies.values()))
+        a = StrategyA(self.stage2.trigger,
+            list(self.stage2.strategies.values()), a_min, a_max)
+        b = StrategyB(list(self.stage3.strategies.values()), b_timeout)
+        return Strategies(p, q, a, b)
 
     def _mapping(self, publishers, assumptions):
         r = {}
@@ -664,16 +723,13 @@ class Stage2Builder(StrategyBuilder):
         if activator is not None and activator.alias is not None:
             rostype, assumed = self.topics.get(activator.topic)
             self.types_by_message[activator.alias] = rostype
-        if prop.pattern.is_requirement:
+        if (prop.pattern.is_requirement
+                or prop.pattern.is_response or prop.pattern.is_prevention):
             assert trigger is not None
-            self._build_randoms(trigger, terminator)
-        else:
-            if prop.pattern.is_response or prop.pattern.is_prevention:
-                assert trigger is not None
-                self._build_trigger(trigger, terminator)
-            #self._build_randoms(None, terminator)
-            # it seems that we want to avoid random triggers after all
-            self._build_randoms(trigger, terminator)
+            self._build_trigger(trigger, terminator)
+        #self._build_randoms(None, terminator)
+        # it seems that we want to avoid random triggers after all
+        self._build_randoms(trigger, terminator)
 
     def _build_trigger(self, trigger, terminator):
         topic = trigger.topic

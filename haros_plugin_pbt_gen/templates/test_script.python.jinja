@@ -174,29 +174,7 @@ def all_except(array, exclude):
 # Custom Message Strategies
 ################################################################################
 
-{# Strategies = ("stages", "activator", "trigger") #}
-{# stages = [strategy (random msg)] x3 #}
-{# activator = strategy #}
-{# trigger = strategy #}
-{# MsgStrategy = ("name", "args", "pkg", "msg", "statements",
-                  "is_default", "topic", "alias") #}
-
-{% for stage in strategy_map.stages %}
-    {% for st in stage %}
-        {% if not st.is_default %}
-
-{{ strats.custom_msg(st) }}
-        {% endif %}
-    {% endfor %}
-{% endfor %}
-{% if strategy_map.activator and not strategy_map.activator.is_default %}
-
-{{ strats.custom_msg(strategy_map.activator) }}
-{% endif %}
-{% if strategy_map.trigger and not strategy_map.trigger.is_default %}
-
-{{ strats.custom_msg(strategy_map.trigger) }}
-{% endif %}
+{{ custom_msg_strategies }}
 
 
 ################################################################################
@@ -204,11 +182,10 @@ def all_except(array, exclude):
 ################################################################################
 
 class Trace(object):
-    __slots__ = ("chunks", "terminator")
+    __slots__ = ("chunks",)
 
-    def __init__(self, chunks, terminator):
+    def __init__(self, chunks):
         self.chunks = chunks
-        self.terminator = terminator
 
     def __len__(self):
         return len(self.chunks)
@@ -224,19 +201,21 @@ class Trace(object):
 
 
 class Chunk(object):
-    __slots__ = ("messages", "delay")
+    __slots__ = ("messages", "delay", "relative_delay", "set_clock")
 
-    def __init__(self, msgs=None, delay=0.0):
+    def __init__(self, msgs=None, delay=0.0, relative=False, clock=False):
         # msgs :: [(Message, string (topic))]
         self.messages = msgs if msgs is not None else []
         self.delay = delay
+        self.relative_delay = relative
+        self.set_clock = clock
 
     def __str__(self):
         return "({} s) {}".format(self.delay, self.messages)
 
     def __repr__(self):
-        return "Chunk(msgs={}, delay={})".format(
-            repr(self.messages), self.delay)
+        return "Chunk(msgs={}, delay={}, relative={}, clock={})".format(
+            repr(self.messages), self.delay, self.relative_delay, self.set_clock)
 
 
 @strategies.composite
@@ -251,7 +230,7 @@ def chunk_splits(draw, msgs):
     return cs
 
 
-{{ strats.trace_strategy(strategy_map) }}
+{{ trace_strategy }}
 
 
 ################################################################################

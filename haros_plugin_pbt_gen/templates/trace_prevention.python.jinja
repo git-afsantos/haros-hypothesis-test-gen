@@ -1,0 +1,20 @@
+{% import 'trace_common.python.jinja' as trace %}
+{# expects (p, q, a, b) #}
+
+@strategies.composite
+def traces(draw):
+    chunks = []
+    r = draw(strategies.randoms())
+{% if p.strategy %} {# after or after-until #}
+{{ trace.gen_activator(p)|indent(width=4, first=true) }}
+{% else %}
+# Property scope is activated at launch.
+{% endif %}
+{{ trace.gen_triggers(a, b)|indent(width=4, first=true) }}
+{% if q.strategy %} {# after-until or until #}
+{{ trace.gen_terminator(q, b.timeout, 2 * b.timeout)|indent(width=4, first=true) }}
+{% else %}
+# Property scope is terminated at shutdown.
+{{ trace.gen_delay_chunk(b.timeout, 2 * b.timeout, relative_delay=true)|indent(width=4, first=true) }}
+{% endif %}
+    return Trace(chunks)
