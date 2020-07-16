@@ -92,9 +92,10 @@ def _validate_settings(iface, settings):
 PublisherTemplate = namedtuple("PublisherTemplate",
     ("topic", "type_token", "rospy_type"))
 
-TestTemplate = namedtuple("TestTemplate", ("monitor", "custom_msg_strategies",
-    "trace_strategy",
-    "publishers", "subscribers", "pkg_imports", "property_text"))
+TestTemplate = namedtuple("TestTemplate",
+    ("monitor", "default_msg_strategies", "custom_msg_strategies",
+     "trace_strategy", "publishers", "subscribers", "pkg_imports",
+     "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
@@ -135,9 +136,12 @@ class TestGenerator(object):
             lstrip_blocks=True,
             autoescape=False
         )
+        self.node_names = list(n.rosname.full for n in config.nodes.enabled)
 
     def make_tests(self, config_num):
-        monitors, tests = self._make_monitors_and_tests()
+        hpl_properties = self._filter_properties()
+        monitors = self._make_monitors(hpl_properties)
+        tests = self._make_test_templates(hpl_properties, monitors)
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
@@ -148,6 +152,16 @@ class TestGenerator(object):
             msg = msg.format(self.config.name)
             self.iface.log_warning(msg)
             # TODO generate "empty" monitor, all others become secondary
+
+    def _filter_properties(self):
+        properties = []
+        for p in self.config.hpl_properties:
+            if not p.is_fully_typed():
+                self.iface.log_warning(
+                    "Skipping untyped property:\n{}".format(p))
+                continue
+            properties.append(p)
+        return properties
 
     # FIXME fetching type tokens should be part of HAROS
     def _get_open_subbed_topics(self):
@@ -186,6 +200,14 @@ class TestGenerator(object):
                     pubbed[topic.rosname.full] = get_type(topic.type)
         return pubbed
 
+    def _get_publishers(self):
+        # FIXME build list based on self.strategies stages
+        pubs = []
+        for topic, type_token in self.subbed_topics.items():
+            rospy_type = type_token.type_name.replace("/", ".")
+            pubs.append(PublisherTemplate(topic, type_token, rospy_type))
+        return pubs
+
     def _get_subscribers(self):
         subs = []
         for topic, type_token in self.subbed_topics.items():
@@ -194,56 +216,68 @@ class TestGenerator(object):
             subs.append(Subscriber(topic, type_token, False))
         return subs
 
-    def _make_monitors_and_tests(self):
-        all_monitors = []
-        tests = []
-        for i in range(len(self.config.hpl_properties)):
-            p = self.config.hpl_properties[i]
-            if not p.is_fully_typed():
-                self.iface.log_warning(
-                    "Skipping untyped property:\n{}".format(p))
-                continue
+    def _make_monitors(self, hpl_properties):
+        monitors = []
+        for i in range(len(hpl_properties)):
+            p = hpl_properties[i]
             uid = "P" + str(i + 1)
             monitor = MonitorTemplate(
                 uid, p, self.pubbed_topics, self.subbed_topics)
-            all_monitors.append(monitor)
+            self._apply_slack(monitor)
+            monitor.variable_substitution()
+            monitors.append(monitor)
+        return monitors
+
+    def _make_test_templates(self, hpl_properties, monitors):
+        assert len(hpl_properties) == len(monitors)
+        tests = []
+        for i in range(len(monitors)):
+            p = hpl_properties[i]
             try:
                 strategies = self.strategies.build_strategies(p)
+                py_default_msgs = self._render_template(
+                    "default_msg_strategies.python.jinja",
+                    {"type_tokens": self.strategies.default_strategies.values()},
+                    strip=True)
                 py_custom_msgs = self._render_template(
                     "custom_msg_strategies.python.jinja",
                     strategies._asdict(), strip=True)
             except StrategyError as e:
                 self.iface.log_warning(
                     "Cannot produce a test for:\n'{}'\n\n{}".format(p, e))
-            self._apply_slack(monitor)
-            tests.append(TestTemplate(monitor, py_custom_msgs,
+                continue
+            ms = self._get_test_monitors(i, monitors)
+            data = {
+                "main_monitor": monitors[i].class_name,
+                "monitor_classes": [m.class_name for m in ms],
+                "publishers": self._get_publishers(),
+                "subscribers": self._get_subscribers(),
+                "commands": self.commands,
+                "nodes": self.node_names,
+                "settings": self.settings,
+            }
+            
+            tests.append(TestTemplate(monitor, py_default_msgs, py_custom_msgs,
                 self._render_trace_strategy(p, strategies),
                 self._get_publishers(), self._get_subscribers(),
                 self.strategies.pkg_imports, monitor.hpl_string))
             monitor.variable_substitution()
         return all_monitors, tests
 
-    def _get_test_monitors(self, test_case, monitors):
+    def _get_test_monitors(self, i, monitors):
         extras = self.settings.get("extra_monitors", True)
         if extras is True:
             return monitors
         if extras is False:
-            return (test_case.monitor,)
+            return (monitors[i],)
         if extras == "safety":
-            ms = [m for m in monitors if m.is_safety]
-            if test_case.monitor not in ms:
-                ms.append(test_case.monitor)
+            ms = []
+            for j in range(len(monitors)):
+                if monitors[j].is_safety or j == i:
+                    ms.append(monitors[j])
             return ms
         # any other value is invalid; assume default behaviour
         return monitors
-
-    def _get_publishers(self):
-        # FIXME build list based on self.strategies stages
-        pubs = []
-        for topic, type_token in self.subbed_topics.items():
-            rospy_type = type_token.type_name.replace("/", ".")
-            pubs.append(PublisherTemplate(topic, type_token, rospy_type))
-        return pubs
 
     def _length_for_field(self, field_token, type_token, lengths):
         selector = Selector(field_token, type_token)
@@ -312,7 +346,7 @@ class TestGenerator(object):
             "events": tuple(e for m in all_monitors for e in m.events),
             "main_monitor": test_case.monitor,
             "monitors": all_monitors,
-            "default_strategies": self.strategies.default_strategies.values(),
+            "default_msg_strategies": test_case.default_msg_strategies,
             "custom_msg_strategies": test_case.custom_msg_strategies,
             "trace_strategy": test_case.trace_strategy,
             "publishers": test_case.publishers,

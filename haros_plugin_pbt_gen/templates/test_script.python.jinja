@@ -162,13 +162,8 @@ def all_except(array, exclude):
 # Base Strategies
 ################################################################################
 
-{% include "base_strategies.py" ignore missing %}
+{{ default_msg_strategies }}
 
-{% import 'strategies.python.jinja' as strats %}
-{% for type_token in default_strategies %}
-
-{{ strats.default_msg(type_token) }}
-{% endfor %}
 
 ################################################################################
 # Custom Message Strategies
@@ -466,6 +461,7 @@ class TestSubscriber(object):
         for cb in self.callbacks:
             cb(msg, time=time)
 
+{% import 'strategies.python.jinja' as strats %}
 {{ strats.test_trace(main_monitor, monitors, publishers, subscribers,
                      commands, nodes, settings) }}
 

@@ -1,3 +1,4 @@
+{% import 'default_msg_strategies.python.jinja' as msgs %}
 
 {# Generation of Random messages. #}
 {% macro _gen_spam(spam) -%}
@@ -5,7 +6,7 @@
 all_msgs = []
 {% for strategy in spam %}
     {% if strategy.is_default %}
-elems = {{ _strategy_name(strategy.pkg, strategy.msg) }}()
+elems = {{ msgs.strategy_name(strategy.pkg, strategy.msg) }}()
     {% else %}
 elems = {{ strategy.name }}({{ strategy.args|join(', ') }})
     {% endif %}
@@ -41,7 +42,7 @@ chunks.append(Chunk())
 {% endif %}
 # ----- Activator -------------------------------------
 {% if activator.is_default %}
-    {% set strategy = _strategy_name(activator.pkg, activator.msg) %}
+    {% set strategy = msgs.strategy_name(activator.pkg, activator.msg) %}
     {% set args = '' %}
 {% else %}
     {% set strategy = activator.name %}
@@ -68,7 +69,7 @@ if all_msgs:
 {% endif %}
 # ----- Terminator ------------------------------------
 {% if q.strategy.is_default %}
-    {% set strategy = _strategy_name(q.strategy.pkg, q.strategy.msg) %}
+    {% set strategy = msgs.strategy_name(q.strategy.pkg, q.strategy.msg) %}
     {% set args = '' %}
 {% else %}
     {% set strategy = q.strategy.name %}
@@ -97,7 +98,7 @@ chunks.append(chunk)
 
 {% macro gen_triggers(a, b) -%}
 {% if a.strategy.is_default %}
-    {% set strategy = _strategy_name(a.strategy.pkg, a.strategy.msg) %}
+    {% set strategy = msgs.strategy_name(a.strategy.pkg, a.strategy.msg) %}
     {% set args = '' %}
 {% else %}
     {% set strategy = a.strategy.name %}

@@ -1,177 +1,4 @@
 
-
-
-{##############################################################################
- # Trace Macros
- ##############################################################################}
-
-{# Transforms a sequence of events into a sequence of message chunks,
-    with one message per chunk. #}
-{% macro _chunks_for_sequence(event) -%}
-{% if event.strategy %}
-    {% set strat = event.strategy.name %}
-    {% set args = event.strategy.args|join(', ') %}
-{% else %}
-    {% set strat = _type_to_strategy(event.msg_type) %}
-    {% set args = '' %}
-{% endif %}
-msg = (draw({{ strat }}({{ args }})), "{{ event.topic }}")
-{% if event.alias %}
-msg_{{ event.alias }} = msg
-{% endif %}
-chunks.append(Chunk(msgs=[msg], delay={{ event.delay }}))
-    {% if event.forks and not event.is_leaf -%}
-    {# NOTE in a normal sequence, an event should only have one fork #}
-{{ _chunks_for_sequence(event.forks[0]) }}
-    {%- endif %}
-{%- endmacro %}
-
-{# Transforms a top-level disjunction of event chains into a sequence of
-    message chunks, with one message per chunk.
-    A random disjunction branch is selected at runtime. #}
-{% macro _chunks_for_disjunction(roots) -%}
-    {% if roots|length > 1 -%}
-branch = r.randint(0, {{ roots|length }})
-        {% for root in roots %}
-if branch == {{ loop.index0 }}:
-{{ _chunks_for_sequence(root)|indent(width=4, first=true) }}
-{#- #}
-        {% endfor %}
-    {%- else -%}
-{{ _chunks_for_sequence(roots|first) }}
-    {%- endif %}
-{%- endmacro %}
-
-{# Breaks a list of random messages into a list of message chunks.
-    The number of chunks is selected at random, and the chunk sizes
-    are approximately equal (+- 1). #}
-{% macro _chunks_no_trigger() -%}
-if all_msgs:
-    n = draw(strategies.integers(min_value=1, max_value=len(all_msgs)))
-    floats = strategies.floats(min_value=0.0, max_value=1.0)
-    chunks = [Chunk(delay=draw(floats)) for i in range(n)]
-    i = 0
-    for msg in all_msgs:
-        chunks[i].messages.append(msg)
-        i = (i + 1) % n
-else:
-    chunks = []
-{%- endmacro %}
-
-{# Breaks a trigger sequence of events into a list of message chunks, with
-    one trigger message per chunk, plus an additional chunk at the start.
-    Also distributes a list of random messages over the chunks, making no
-    effort for chunk sizes to be even. #}
-{% macro _chunks_with_trigger(trigger) -%}
-# chunks for trigger sequence
-chunks = [Chunk()]
-{{ _chunks_for_disjunction(trigger.roots) }}
-{#- #}
-n = len(all_msgs)
-k = 0
-i = 0
-while n - k > 0:
-    take = r.randint(0, n - k)
-    if take:
-        chunks[i].messages.extend(all_msgs[k:k+take])
-        k += take
-    i = (i + 1) % len(chunks)
-if not chunks[0].messages:
-    chunks.pop(0)
-{%- endmacro %}
-
-{% macro _chunks_for_activator(activator) -%}
-# chunks for activator sequence
-main_chunks = chunks
-chunks = []
-{{ _chunks_for_disjunction(activator.roots) }}
-{#- #}
-chunks.extend(main_chunks)
-{%- endmacro %}
-
-
-{% macro _stage_strategies(stage, main_strat, i, allow_repeat=false) -%}
-# ----- Stage {{ i }} ----------------------------------------
-{% if stage %}
-all_msgs = []
-{% endif %}
-{% for st in stage %}
-    {% if st.is_default %}
-elems = {{ _strategy_name(st.pkg, st.msg) }}()
-    {% else %}
-elems = {{ st.name }}({{ st.args|join(', ') }})
-    {% endif %}
-msgs = draw(strategies.lists(elems, min_size=0, max_size=3))
-for msg in msgs:
-    all_msgs.append((msg, "{{ st.topic }}"))
-{% else %}
-# There are no strategies for random messages.
-{% endfor %}
-{% if stage %}
-if all_msgs:
-    r.shuffle(all_msgs)
-    chunks.extend(draw(chunk_splits(all_msgs)))
-    {% if main_strat %}
-else:
-    chunks.append(Chunk())
-    {% endif %}
-{% elif main_strat %}
-chunks.append(Chunk())
-{% endif %}
-{% if main_strat %}
-    {% if main_strat.is_default %}
-        {% set strat = _strategy_name(main_strat.pkg, main_strat.msg) %}
-        {% set args = '' %}
-    {% else %}
-        {% set strat = main_strat.name %}
-        {% set args = main_strat.args|join(', ') %}
-    {% endif %}
-msg = (draw({{ strat }}({{ args }})), "{{ main_strat.topic }}")
-    {% if main_strat.alias %}
-msg_{{ main_strat.alias }} = msg
-    {% endif %}
-chunks[-1].messages.append(msg)
-    {% if allow_repeat %}
-if r.random() < 0.5:
-    chunks.append(Chunk())
-    msg = (draw({{ strat }}({{ args }})), "{{ main_strat.topic }}")
-    chunks[-1].messages.append(msg)
-    {% endif %}
-{% else %}
-# There is no target event to end this stage.
-{% endif %}
-{%- endmacro %}
-
-
-{# Builds a strategy to generate test traces in three stages.
-    A trace is, essentially, a list of message chunks, where each chunk
-    contains a delay, and a list of message-publisher pairs (of randomly
-    generated messages, using an appropriate strategy). #}
-{% macro trace_strategy(strategy_map) %}
-@strategies.composite
-def traces(draw):
-    chunks = []
-    r = draw(strategies.randoms())
-{{ _stage_strategies(strategy_map.stages[0], strategy_map.activator, 1)|indent(width=4, first=true) }}
-{{ _stage_strategies(strategy_map.stages[1], strategy_map.trigger, 2, allow_repeat=true)|indent(width=4, first=true) }}
-{{ _stage_strategies(strategy_map.stages[2], none, 3)|indent(width=4, first=true) }}
-{% if strategy_map.terminator %}
-    {% if strategy_map.terminator.is_default %}
-        {% set strat = _strategy_name(strategy_map.terminator.pkg,
-                                      strategy_map.terminator.msg) %}
-        {% set args = '' %}
-    {% else %}
-        {% set strat = strategy_map.terminator.name %}
-        {% set args = strategy_map.terminator.args|join(', ') %}
-    {% endif %}
-    terminator = (draw({{ strat }}({{ args }})), "{{ strategy_map.terminator.topic }}")
-{% else %}
-    terminator = None
-{% endif %}
-    return Trace(chunks, terminator)
-{% endmacro %}
-
-
 {##############################################################################
  # Test Case Macros
  ##############################################################################}
@@ -214,12 +41,18 @@ def _setup_sut(self):
 {% endmacro %}
 
 
+{##############################################################################
+ # Template Body
+ ##############################################################################}
 
 {# Builds the main test case class, which contains the main logic of the test.
     It is responsible for setting up and tearing down the SUT, building
     the various property monitors and replaying a random trace given by
     hypothesis. #}
-{% macro test_trace(main_monitor, monitors, pubs, subs, commands, nodes, settings) %}
+
+{# expects (main_monitor, monitor_classes, publishers, subscribers, commands, nodes, settings) #}
+
+
 class TestTracer(unittest.TestCase):
     __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
                  "launches", "trace_done", "trace_start_time", "msg_log",
@@ -237,7 +70,7 @@ class TestTracer(unittest.TestCase):
         self.monitors = []
         self.msg_log = []
         self.subs = {}
-        {% for sub in subs %}
+        {% for sub in subscribers %}
             {% if sub.fake %}
         self.subs["{{ sub.topic }}"] = FakeTestSubscriber({# -#}
             "{{ sub.topic }}", self)
@@ -247,7 +80,7 @@ class TestTracer(unittest.TestCase):
             {% endif %}
         {% endfor %}
         self.pubs = {}
-        {% for pub in pubs %}
+        {% for pub in publishers %}
         self.pubs["{{ pub.topic }}"] = TestPublisher("{{ pub.topic }}", {# -#}
             {{ pub.rospy_type }}, self.subs["{{ pub.topic }}"])
         {% endfor %}
@@ -356,10 +189,10 @@ class TestTracer(unittest.TestCase):
         self.launch_time = 0
         self.deadline = 0
         self.monitors = []
-        {% for monitor in monitors %}
-        self.monitors.append({{ monitor.class_name }}(self.subs))
+        {% for class_name in monitor_classes %}
+        self.monitors.append({{ class_name }}(self.subs))
         {% endfor %}
-        self.main_monitor = self.monitors[{{ monitors.index(main_monitor) }}]
+        self.main_monitor = self.monitors[{{ monitor_classes.index(main_monitor) }}]
         self.launches = []
         self.trace_done = False
 
@@ -497,4 +330,3 @@ class TestTracer(unittest.TestCase):
                     note(str(msg))
                 p_topic = topic
                 p_msg = msg
-{% endmacro %}

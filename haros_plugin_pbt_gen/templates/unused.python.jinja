@@ -1,0 +1,36 @@
+{# Transforms a sequence of events into a sequence of message chunks,
+    with one message per chunk. #}
+{% macro _chunks_for_sequence(event) -%}
+{% if event.strategy %}
+    {% set strat = event.strategy.name %}
+    {% set args = event.strategy.args|join(', ') %}
+{% else %}
+    {% set strat = _type_to_strategy(event.msg_type) %}
+    {% set args = '' %}
+{% endif %}
+msg = (draw({{ strat }}({{ args }})), "{{ event.topic }}")
+{% if event.alias %}
+msg_{{ event.alias }} = msg
+{% endif %}
+chunks.append(Chunk(msgs=[msg], delay={{ event.delay }}))
+    {% if event.forks and not event.is_leaf -%}
+    {# NOTE in a normal sequence, an event should only have one fork #}
+{{ _chunks_for_sequence(event.forks[0]) }}
+    {%- endif %}
+{%- endmacro %}
+
+{# Transforms a top-level disjunction of event chains into a sequence of
+    message chunks, with one message per chunk.
+    A random disjunction branch is selected at runtime. #}
+{% macro _chunks_for_disjunction(roots) -%}
+    {% if roots|length > 1 -%}
+branch = r.randint(0, {{ roots|length }})
+        {% for root in roots %}
+if branch == {{ loop.index0 }}:
+{{ _chunks_for_sequence(root)|indent(width=4, first=true) }}
+{#- #}
+        {% endfor %}
+    {%- else -%}
+{{ _chunks_for_sequence(roots|first) }}
+    {%- endif %}
+{%- endmacro %}
