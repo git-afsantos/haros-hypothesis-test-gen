@@ -34,6 +34,7 @@ def _setup_sut(self):
     self._wait_for_nodes()
     self._wait_for_interfaces()
     self.launch_time = get_time()
+    self.clock = self.launch_time
     self.deadline = self.launch_time + {# defaults to 15 seconds -#}
         {{ settings['deadline']|d(15, true) }}
     for monitor in self.monitors:
@@ -56,7 +57,7 @@ def _setup_sut(self):
 class TestTracer(unittest.TestCase):
     __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
                  "launches", "trace_done", "trace_start_time", "msg_log",
-                 "n_examples", "n_fail", "times")
+                 "n_examples", "n_fail", "times", "clock")
 
     NODES = {{ nodes }}
 
@@ -87,6 +88,7 @@ class TestTracer(unittest.TestCase):
         self.n_examples = 0
         self.n_fail = 0
         self.times = []
+        self.clock = 0
 
     def tearDown(self):
         unittest.TestCase.tearDown(self)
@@ -130,47 +132,28 @@ class TestTracer(unittest.TestCase):
             return
         try:
             self.trace_start_time = get_time()
-            for chunk in trace:
-                if chunk.delay:
-                    rospy.sleep(chunk.delay)
-                else:
-                    rate.sleep()
-                self._update()
-                {% if main_monitor.is_liveness %}
-                if self.main_monitor.at_least_once:
-                    return
-                {% endif %}
-                for msg, topic in chunk.messages:
-                    self.pubs[topic].publish(msg)
-            {% if main_monitor.is_reentrant %}
-            rospy.sleep({{ main_monitor.time_to_reenter }})
-            for chunk in trace:
-                if chunk.delay:
-                    rospy.sleep(chunk.delay)
-                else:
-                    rate.sleep()
-                self._update()
-                {% if main_monitor.is_liveness %}
-                if self.main_monitor.at_least_once:
-                    return
-                {% endif %}
-                for msg, topic in chunk.messages:
-                    self.pubs[topic].publish(msg)
-            {% endif %}
+            for rep in trace.repetitions:
+                for chunk in trace:
+                    if chunk.delay > 0.0:
+                        if chunk.relative_delay:
+                            while (get_time() - self.clock) < chunk.delay:
+                                self._update()
+                                rate.sleep()
+                        else:
+                            rospy.sleep(chunk.delay)
+                    else:
+                        rate.sleep()
+                    self._update()
+                    {% if main_monitor.is_liveness %}
+                    if self.main_monitor.at_least_once:
+                        return
+                    {% endif %}
+                    for msg, topic in chunk.messages:
+                        self.pubs[topic].publish(msg)
             self.trace_done = True
             self._check_status()
-            rate = rospy.Rate(10)
-            while self.main_monitor.active:
-                rate.sleep()
-                self._update()
-            for monitor in self.monitors:
-                assert not monitor.has_failed
-            {% if main_monitor.is_liveness %}
-                {% if main_monitor.trigger %}
-            assert self.main_monitor.triggered, "invalid test"
-                {% endif %}
-            assert self.main_monitor.at_least_once
-            {% endif %}
+            self._update()
+            self._check_outcome(trace)
             passed = True
             print "[Example #{}]: OK".format(self.n_examples)
         {#except AssertionError as e:
@@ -187,6 +170,7 @@ class TestTracer(unittest.TestCase):
     def _setup_test(self):
         self.msg_log = []
         self.launch_time = 0
+        self.clock = 0
         self.deadline = 0
         self.monitors = []
         {% for class_name in monitor_classes %}
@@ -206,28 +190,37 @@ class TestTracer(unittest.TestCase):
         self._wait_for_nodes(online=False)
         rospy.sleep(1.0)
 
-    def _update(self):
+    def _update(self, set_clock=False):
         if rospy.is_shutdown():
             raise RuntimeError("rospy is shut down")
         for launch in self.launches:
             launch.spin_once()
         now = get_time()
+        if set_clock:
+            self.clock = now
         for monitor in self.monitors:
             monitor.update(now)
             assert not monitor.has_failed, monitor.HPL_PROPERTY
-        # FIXME this assertion is not correct
-        # assert self.main_monitor.active or self.trace_done, "invalid test"
-        {% if not main_monitor.has_scope_timeout %}
-        if now > self.deadline:
-            {# assert self.main_monitor.active #}
-            assert self.trace_done, "invalid test"
-            {% if main_monitor.is_liveness %}
+
+    def _check_outcome(self, trace):
+        now = get_time()
+        if trace.ends_via_timeout:
+        {% if main_monitor.is_liveness %}
+            if trace.n_triggers > 0:
+                assert self.main_monitor.triggered, "invalid test"
             if not self.main_monitor.at_least_once:
                 raise TestTimeoutError("timed out before a result")
-            {% endif %}
-            {# assert main_monitor.terminator.is_all_receive #}
-            self.main_monitor._deactivate(now)
         {% endif %}
+            if self.main_monitor.active:
+                self.main_monitor._deactivate(now)
+        else:
+            assert not self.main_monitor.active, "failed to detect terminator"
+        {% if main_monitor.is_liveness %}
+            if trace.n_triggers > 0:
+                assert self.main_monitor.triggered, "invalid test"
+            assert self.main_monitor.at_least_once, self.main_monitor.HPL_PROPERTY
+        {% endif %}
+        assert not self.main_monitor.has_failed, self.main_monitor.HPL_PROPERTY
 
     def _wait_for_nodes(self, timeout=60.0, online=True):
         if online:

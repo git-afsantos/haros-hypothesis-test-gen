@@ -115,6 +115,7 @@ for chunk in new_chunks:
     chunk.relative_delay = True
     chunk.delay = draw(delays)
     chunk.set_clock = True
+    chunk.contains_trigger = True
     {% if a.spam %}
 {{ _gen_spam(a.spam) }}
 if all_msgs:

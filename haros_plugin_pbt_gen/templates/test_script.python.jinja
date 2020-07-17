@@ -177,10 +177,20 @@ def all_except(array, exclude):
 ################################################################################
 
 class Trace(object):
-    __slots__ = ("chunks",)
+    __slots__ = ("chunks", "repetitions")
 
-    def __init__(self, chunks):
+    def __init__(self, chunks, reps=1):
         self.chunks = chunks
+        self.repetitions = reps
+
+    @property
+    def ends_via_timeout(self):
+        return (not self.chunks
+            or (not self.chunks[-1].messages and self.chunks[-1].delay > 0.0))
+
+    @property
+    def n_triggers(self):
+        return sum(1 for chunk in self.chunks if chunk.contains_trigger)
 
     def __len__(self):
         return len(self.chunks)
@@ -196,7 +206,8 @@ class Trace(object):
 
 
 class Chunk(object):
-    __slots__ = ("messages", "delay", "relative_delay", "set_clock")
+    __slots__ = ("messages", "delay", "relative_delay", "set_clock",
+                 "contains_trigger")
 
     def __init__(self, msgs=None, delay=0.0, relative=False, clock=False):
         # msgs :: [(Message, string (topic))]
@@ -204,6 +215,7 @@ class Chunk(object):
         self.delay = delay
         self.relative_delay = relative
         self.set_clock = clock
+        self.contains_trigger = False
 
     def __str__(self):
         return "({} s) {}".format(self.delay, self.messages)

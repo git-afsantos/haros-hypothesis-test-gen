@@ -1,5 +1,5 @@
 {% import 'trace_common.python.jinja' as trace %}
-{# expects (p, q, a, b) #}
+{# expects (p, q, a, b, reps) #}
 
 @strategies.composite
 def traces(draw):
@@ -20,4 +20,4 @@ def traces(draw):
 # Property scope is terminated at shutdown.
 {{ trace.gen_delay_chunk(b.timeout, 2 * b.timeout, relative_delay=true)|indent(width=4, first=true) }}
 {% endif %}
-    return Trace(chunks)
+    return Trace(chunks, reps={{ reps|default(1) }})

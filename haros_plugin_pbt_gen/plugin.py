@@ -83,6 +83,22 @@ def _validate_settings(iface, settings):
     if val not in exp:
         iface.log_warning(msg.format(val, exp, default))
         settings["extra_monitors"] = default
+    val = settings.get("deadline")
+    exp = (None, float,)
+    default = 10.0
+    if val is None:
+        settings["deadline"] = default
+    elif not isinstance(val, float):
+        iface.log_warning(msg.format(val, exp, default))
+        settings["deadline"] = default
+    val = settings.get("max_scopes")
+    exp = (None, int,)
+    default = 2
+    if val is None:
+        settings["max_scopes"] = default
+    elif not isinstance(val, int):
+        iface.log_warning(msg.format(val, exp, default))
+        settings["max_scopes"] = default
 
 
 ################################################################################
@@ -127,7 +143,8 @@ class TestGenerator(object):
             else:
                 self.iface.log_warning(
                     "Skipping untyped assumption:\n{}".format(p))
-        self.strategies = StrategyManager(self.subbed_topics, assumptions)
+        self.strategies = StrategyManager(self.subbed_topics, assumptions,
+            deadline=settings.get("deadline"))
         self.jinja_env = Environment(
             loader=PackageLoader(KEY, "templates"),
             line_statement_prefix=None,
@@ -367,7 +384,10 @@ class TestGenerator(object):
         self.iface.export_file(filename)
 
     def _render_trace_strategy(self, prop, strategies):
-        data = strategies._asdict()
+        data = dict(strategies._asdict())
+        data["reps"] = 1
+        if prop.scope.is_after_until:
+            data["reps"] = self.settings.get("max_scopes", 2)
         if prop.pattern.is_absence:
             return self._render_template(
                 "trace_absence.python.jinja", data, strip=True)
@@ -416,9 +436,9 @@ Strategies = namedtuple("Strategies", ("p", "q", "a", "b"))
 # only 'requires', 'causes' and 'forbids' have stage 2
 
 class StrategyManager(object):
-    __slots__ = ("stage1", "stage2", "stage3", "terminator")
+    __slots__ = ("stage1", "stage2", "stage3", "terminator", "deadline")
 
-    def __init__(self, pubs, assumptions):
+    def __init__(self, pubs, assumptions, deadline=10.0):
         # pubs: topic -> ROS type token
         # assumptions: [HplAssumption]
         default_strategies = {}
@@ -430,6 +450,7 @@ class StrategyManager(object):
         self.stage3 = Stage3Builder(topics, default_strategies, pkg_imports)
         self.terminator = TerminatorBuilder(topics,
             default_strategies, pkg_imports)
+        self.deadline = deadline
 
     @property
     def default_strategies(self):
@@ -448,7 +469,7 @@ class StrategyManager(object):
         self.stage2.build(prop)
         self.stage3.build(prop)
         self.terminator.build(prop)
-        b_timeout = 1.0
+        b_timeout = self.deadline
         a_min = 0
         a_max = 0
         if prop.pattern.is_response or prop.pattern.is_prevention:
