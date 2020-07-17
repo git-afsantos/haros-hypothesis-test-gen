@@ -553,7 +553,19 @@ def _deactivate(self, time):
 {% endmacro %}
 
 
-{% macro Monitor(monitor, slack=0.0, debug=false) %}
+
+{##############################################################################
+    Template Body
+ ##############################################################################}
+
+{# expects (monitor, slack, debug) #}
+
+
+{% for event in monitor.events %}
+{{ Listener(event) }}
+
+{% endfor %}
+
 class {{ monitor.class_name }}(PropertyMonitor):
     {{ _monitor_slots(monitor) }}
 
@@ -628,4 +640,3 @@ class {{ monitor.class_name }}(PropertyMonitor):
             {% endfor %}
         {% endfor %}
         pass
-{% endmacro %}

@@ -84,19 +84,19 @@ def _validate_settings(iface, settings):
         iface.log_warning(msg.format(val, exp, default))
         settings["extra_monitors"] = default
     val = settings.get("deadline")
-    exp = (None, float,)
+    exp = (None, "float >= 0.0",)
     default = 10.0
     if val is None:
         settings["deadline"] = default
-    elif not isinstance(val, float):
+    elif not isinstance(val, float) or val < 0.0:
         iface.log_warning(msg.format(val, exp, default))
         settings["deadline"] = default
     val = settings.get("max_scopes")
-    exp = (None, int,)
+    exp = (None, "int >= 1",)
     default = 2
     if val is None:
         settings["max_scopes"] = default
-    elif not isinstance(val, int):
+    elif not isinstance(val, int) or val < 1:
         iface.log_warning(msg.format(val, exp, default))
         settings["max_scopes"] = default
 
@@ -109,9 +109,9 @@ PublisherTemplate = namedtuple("PublisherTemplate",
     ("topic", "type_token", "rospy_type"))
 
 TestTemplate = namedtuple("TestTemplate",
-    ("monitor", "default_msg_strategies", "custom_msg_strategies",
-     "trace_strategy", "publishers", "subscribers", "pkg_imports",
-     "property_text"))
+    ("default_msg_strategies", "custom_msg_strategies",
+     "trace_strategy", "monitor_templates", "test_case_template",
+     "pkg_imports", "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
@@ -162,8 +162,7 @@ class TestGenerator(object):
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
-            test_monitors = self._get_test_monitors(testable, monitors)
-            self._write_test_files(tests[i], test_monitors, filename)
+            self._write_test_files(tests[i], filename)
         if not tests:
             msg = "None of the given properties for {} is directly testable."
             msg = msg.format(self.config.name)
@@ -243,6 +242,13 @@ class TestGenerator(object):
             self._apply_slack(monitor)
             monitor.variable_substitution()
             monitors.append(monitor)
+            data = {
+                "monitor": monitor,
+                "slack": self.settings.get("slack", 0.0),
+                "debug": self.settings.get("debug", False),
+            }
+            monitor.python = self._render_template(
+                "monitor.python.jinja", data, strip=True)
         return monitors
 
     def _make_test_templates(self, hpl_properties, monitors):
@@ -272,14 +278,15 @@ class TestGenerator(object):
                 "commands": self.commands,
                 "nodes": self.node_names,
                 "settings": self.settings,
+                "is_liveness": p.is_liveness,
             }
-            
-            tests.append(TestTemplate(monitor, py_default_msgs, py_custom_msgs,
-                self._render_trace_strategy(p, strategies),
-                self._get_publishers(), self._get_subscribers(),
-                self.strategies.pkg_imports, monitor.hpl_string))
-            monitor.variable_substitution()
-        return all_monitors, tests
+            py_test_case = self._render_template(
+                "test_case.python.jinja", data, strip=True)
+            py_monitors = [m.python for m in ms]
+            tests.append(TestTemplate(py_default_msgs, py_custom_msgs,
+                self._render_trace_strategy(p, strategies), py_monitors,
+                py_test_case, self.strategies.pkg_imports, monitor.hpl_string,))
+        return tests
 
     def _get_test_monitors(self, i, monitors):
         extras = self.settings.get("extra_monitors", True)
@@ -344,40 +351,25 @@ class TestGenerator(object):
             if event.external_timer is not None:
                 event.external_timer += slack
 
-    def _write_test_files(self, test_case, all_monitors, filename, debug=False):
-        # test_case: includes monitor for which traces will be generated
-        # all_monitors: used for secondary monitors
-        env = Environment(
-            loader=PackageLoader(KEY, "templates"),
-            line_statement_prefix=None,
-            line_comment_prefix=None,
-            trim_blocks=True,
-            lstrip_blocks=True,
-            autoescape=False
-        )
-        if debug:
-            template = env.get_template("debug_monitor.python.jinja")
-        else:
-            template = env.get_template("test_script.python.jinja")
+    def _write_test_files(self, test_template, filename, debug=False):
         data = {
-            "events": tuple(e for m in all_monitors for e in m.events),
-            "main_monitor": test_case.monitor,
-            "monitors": all_monitors,
-            "default_msg_strategies": test_case.default_msg_strategies,
+            "pkg_imports": test_template.pkg_imports,
+            "default_msg_strategies": test_template.default_msg_strategies,
             "custom_msg_strategies": test_case.custom_msg_strategies,
             "trace_strategy": test_case.trace_strategy,
-            "publishers": test_case.publishers,
-            "subscribers": test_case.subscribers,
-            "settings": self.settings,
+            "monitors": test_template.monitor_templates,
+            "test_case": test_template.test_case_template,
             "log_level": "DEBUG",
-            "pkg_imports": test_case.pkg_imports,
             "property_text": test_case.property_text,
-            "slack": self.settings.get("slack", 0.0),
-            "nodes": list(n.rosname.full for n in self.config.nodes.enabled),
-            "commands": self.commands
         }
+        if debug:
+            python = self._render_template(
+                "debug_monitor.python.jinja", data, strip=False)
+        else:
+            python = self._render_template(
+                "test_script.python.jinja", data, strip=False)
         with open(filename, "w") as f:
-            f.write(template.render(**data).encode("utf-8"))
+            f.write(python)
         mode = os.stat(filename).st_mode
         mode |= (mode & 0o444) >> 2
         os.chmod(filename, mode)

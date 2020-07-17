@@ -223,7 +223,7 @@ class MonitorTemplate(object):
     __slots__ = ("index", "uid", "class_name", "is_liveness", "is_safety",
                  "events", "subs", "aliases", "activator", "terminator",
                  "trigger", "behaviour", "scope_timeout", "hpl_string",
-                 "is_prevention", "is_reentrant", "time_to_reenter")
+                 "is_prevention", "is_reentrant", "time_to_reenter", "python")
 
     _n = 0
 
@@ -260,6 +260,7 @@ class MonitorTemplate(object):
         self._annotate_events(pubbed_topics, subbed_topics)
         self.subs = self._make_subs(hpl_property, pubbed_topics, subbed_topics)
         self.hpl_string = str(hpl_property)
+        self.python = "raise NotImplementedError('monitor not implemented')"
 
     @property
     def saved_vars(self):

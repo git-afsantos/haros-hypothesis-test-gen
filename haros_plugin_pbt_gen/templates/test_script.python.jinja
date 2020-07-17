@@ -156,7 +156,6 @@ def all_except(array, exclude):
         if i not in exclude:
             yield array[i]
 
-{% import 'specs.python.jinja' as specs %}
 
 ################################################################################
 # Base Strategies
@@ -241,7 +240,7 @@ def chunk_splits(draw, msgs):
 
 
 ################################################################################
-# Event Listeners
+# Runtime Verification Base Classes
 ################################################################################
 
 {# Even if a single EventListener class is reused multiple times in a chain,
@@ -313,15 +312,6 @@ class EventListener(object):
         return (0, self.update(time)) # (forks, timed_out)
 
 
-{% for event in events %}
-{{ specs.Listener(event) }}
-
-{% endfor %}
-
-################################################################################
-# Property Monitors
-################################################################################
-
 class PropertyMonitor(object):
     __slots__ = ("lock", "active", "trigger_count", "success", "failure",
                  "on_success", "on_failure", "is_liveness", "is_safety",
@@ -356,9 +346,14 @@ class PropertyMonitor(object):
     def update(self, time):
         raise NotImplementedError("subclasses must override this method")
 
+
+################################################################################
+# Property Monitors
+################################################################################
+
 {% for monitor in monitors %}
 
-{{ specs.Monitor(monitor, slack=slack) }}
+{{ monitor }}
 
 {% endfor %}
 
@@ -366,8 +361,24 @@ class PropertyMonitor(object):
 # Test Tracer
 ################################################################################
 
-class TestTimeoutError(Exception):
-    pass
+class InconclusiveTestError(Exception):
+    @classmethod
+    def timeout(cls):
+        return cls("Test timed out before reaching a verdict.")
+
+    @classmethod
+    def rospy_shutdown(cls):
+        return cls("rospy shut down during the test.")
+
+
+class BuggyTestError(Exception):
+    @classmethod
+    def missing_terminator(cls):
+        return cls("Terminator message was not observed.")
+
+    @classmethod
+    def missing_trigger(cls):
+        return cls("Trigger message was not observed.")
 
 
 class TestPublisher(SubscribeListener):
@@ -473,9 +484,8 @@ class TestSubscriber(object):
         for cb in self.callbacks:
             cb(msg, time=time)
 
-{% import 'strategies.python.jinja' as strats %}
-{{ strats.test_trace(main_monitor, monitors, publishers, subscribers,
-                     commands, nodes, settings) }}
+
+{{ test_case }}
 
 
 ################################################################################

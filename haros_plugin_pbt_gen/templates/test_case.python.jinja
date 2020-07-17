@@ -3,7 +3,54 @@
  # Test Case Macros
  ##############################################################################}
 
-{% macro _setup_sut(commands, nodes, settings) %}
+{% macro _unittest_setup(publishers, subscribers) %}
+def setUp(self):
+    unittest.TestCase.setUp(self)
+    self.trace_start_time = 0
+    uuid = rospy.get_param("/run_id")
+    {# uuid = roslaunch.rlutil.get_or_generate_uuid(None, True) #}
+    roslaunch.configure_logging(uuid)
+    self.launches = []
+    self.monitors = []
+    self.msg_log = []
+    self.subs = {}
+    {% for sub in subscribers %}
+        {% if sub.fake %}
+    self.subs["{{ sub.topic }}"] = FakeTestSubscriber({# -#}
+        "{{ sub.topic }}", self)
+        {% else %}
+    self.subs["{{ sub.topic }}"] = TestSubscriber("{{ sub.topic }}", {# -#}
+        {{ sub.type_token.type_name.replace("/", ".") }}, self)
+        {% endif %}
+    {% endfor %}
+    self.pubs = {}
+    {% for pub in publishers %}
+    self.pubs["{{ pub.topic }}"] = TestPublisher("{{ pub.topic }}", {# -#}
+        {{ pub.rospy_type }}, self.subs["{{ pub.topic }}"])
+    {% endfor %}
+    self.n_examples = 0
+    self.n_fail = 0
+    self.times = []
+    self.clock = 0
+{% endmacro %}
+
+{% macro _setup_test(main_monitor, monitor_classes) %}
+def _setup_test(self):
+    self.msg_log = []
+    self.launch_time = 0
+    self.clock = 0
+    self.deadline = 0
+    self.monitors = []
+    {% for class_name in monitor_classes %}
+    self.monitors.append({{ class_name }}(self.subs))
+    {% endfor %}
+    self.main_monitor = self.monitors[{{ monitor_classes.index(main_monitor) }}]
+    self.launches = []
+    self.trace_done = False
+{% endmacro %}
+
+
+{% macro _setup_sut(commands, settings) %}
 def _setup_sut(self):
     {% for cmd in commands %}
     {# uuid = rospy.get_param("/run_id") #}
@@ -42,6 +89,82 @@ def _setup_sut(self):
 {% endmacro %}
 
 
+{% macro _test_hypothesis(settings, is_liveness) %}
+@settings(max_examples={{ settings['max_examples']|d(1000, true) }}, {# -#}
+            deadline=None)
+@given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
+def _test_hypothesis_properties(self, trace, hz):
+    passed = False
+    self.n_examples += 1
+    self._setup_test()
+    self._setup_sut()
+    self.trace_done = False
+    rate = rospy.Rate(hz)
+    if rospy.is_shutdown():
+        return
+    try:
+        self.trace_start_time = get_time()
+        for rep in trace.repetitions:
+            for chunk in trace:
+                if chunk.delay > 0.0:
+                    if chunk.relative_delay:
+                        while (get_time() - self.clock) < chunk.delay:
+                            self._update()
+                            rate.sleep()
+                    else:
+                        rospy.sleep(chunk.delay)
+                else:
+                    rate.sleep()
+                self._update()
+                {% if is_liveness %}
+                if self.main_monitor.at_least_once:
+                    return
+                {% endif %}
+                for msg, topic in chunk.messages:
+                    self.pubs[topic].publish(msg)
+        self.trace_done = True
+        self._check_status()
+        self._update()
+        self._check_outcome(trace)
+        passed = True
+        print "[Example #{}]: OK".format(self.n_examples)
+    {#except AssertionError as e:
+    #    self._report_trace(trace, hz)
+    #    raise e #}
+    finally:
+        self.times.append(get_time() - self.launch_time)
+        if not passed:
+            self.n_fail += 1
+            print "[Example #{}]: FAIL".format(self.n_examples)
+        self._report_msg_log()
+        self._teardown_sut()
+{% endmacro %}
+
+
+{% macro _check_outcome(is_liveness) %}
+def _check_outcome(self, trace):
+    now = get_time()
+    if trace.ends_via_timeout:
+    {% if is_liveness %}
+        if trace.n_triggers > 0 and not self.main_monitor.triggered:
+            raise BuggyTestError.missing_trigger()
+        if not self.main_monitor.at_least_once:
+            raise InconclusiveTestError.timeout()
+    {% endif %}
+        if self.main_monitor.active:
+            self.main_monitor._deactivate(now)
+    else:
+        if self.main_monitor.active:
+            raise BuggyTestError.missing_terminator()
+    {% if is_liveness %}
+        if trace.n_triggers > 0 and not self.main_monitor.triggered:
+            raise BuggyTestError.missing_trigger()
+        assert self.main_monitor.at_least_once, self.main_monitor.HPL_PROPERTY
+    {% endif %}
+    assert not self.main_monitor.has_failed, self.main_monitor.HPL_PROPERTY
+{% endmacro %}
+
+
 {##############################################################################
  # Template Body
  ##############################################################################}
@@ -51,7 +174,7 @@ def _setup_sut(self):
     the various property monitors and replaying a random trace given by
     hypothesis. #}
 
-{# expects (main_monitor, monitor_classes, publishers, subscribers, commands, nodes, settings) #}
+{# expects (main_monitor, monitor_classes, publishers, subscribers, commands, nodes, settings, is_liveness) #}
 
 
 class TestTracer(unittest.TestCase):
@@ -61,34 +184,7 @@ class TestTracer(unittest.TestCase):
 
     NODES = {{ nodes }}
 
-    def setUp(self):
-        unittest.TestCase.setUp(self)
-        self.trace_start_time = 0
-        uuid = rospy.get_param("/run_id")
-        {# uuid = roslaunch.rlutil.get_or_generate_uuid(None, True) #}
-        roslaunch.configure_logging(uuid)
-        self.launches = []
-        self.monitors = []
-        self.msg_log = []
-        self.subs = {}
-        {% for sub in subscribers %}
-            {% if sub.fake %}
-        self.subs["{{ sub.topic }}"] = FakeTestSubscriber({# -#}
-            "{{ sub.topic }}", self)
-            {% else %}
-        self.subs["{{ sub.topic }}"] = TestSubscriber("{{ sub.topic }}", {# -#}
-            {{ sub.type_token.type_name.replace("/", ".") }}, self)
-            {% endif %}
-        {% endfor %}
-        self.pubs = {}
-        {% for pub in publishers %}
-        self.pubs["{{ pub.topic }}"] = TestPublisher("{{ pub.topic }}", {# -#}
-            {{ pub.rospy_type }}, self.subs["{{ pub.topic }}"])
-        {% endfor %}
-        self.n_examples = 0
-        self.n_fail = 0
-        self.times = []
-        self.clock = 0
+{{ _unittest_setup(publishers, subscribers)|indent(width=4, first=true) }}
 
     def tearDown(self):
         unittest.TestCase.tearDown(self)
@@ -118,69 +214,11 @@ class TestTracer(unittest.TestCase):
             print "Number of examples: {} ({} failures)".format(
                 self.n_examples, self.n_fail)
 
-    @settings(max_examples={{ settings['max_examples']|d(1000, true) }}, {# -#}
-                deadline=None)
-    @given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
-    def _test_hypothesis_properties(self, trace, hz):
-        passed = False
-        self.n_examples += 1
-        self._setup_test()
-        self._setup_sut()
-        self.trace_done = False
-        rate = rospy.Rate(hz)
-        if rospy.is_shutdown():
-            return
-        try:
-            self.trace_start_time = get_time()
-            for rep in trace.repetitions:
-                for chunk in trace:
-                    if chunk.delay > 0.0:
-                        if chunk.relative_delay:
-                            while (get_time() - self.clock) < chunk.delay:
-                                self._update()
-                                rate.sleep()
-                        else:
-                            rospy.sleep(chunk.delay)
-                    else:
-                        rate.sleep()
-                    self._update()
-                    {% if main_monitor.is_liveness %}
-                    if self.main_monitor.at_least_once:
-                        return
-                    {% endif %}
-                    for msg, topic in chunk.messages:
-                        self.pubs[topic].publish(msg)
-            self.trace_done = True
-            self._check_status()
-            self._update()
-            self._check_outcome(trace)
-            passed = True
-            print "[Example #{}]: OK".format(self.n_examples)
-        {#except AssertionError as e:
-        #    self._report_trace(trace, hz)
-        #    raise e #}
-        finally:
-            self.times.append(get_time() - self.launch_time)
-            if not passed:
-                self.n_fail += 1
-                print "[Example #{}]: FAIL".format(self.n_examples)
-            self._report_msg_log()
-            self._teardown_sut()
+{{ _test_hypothesis(settings, is_liveness)|indent(width=4, first=true) }}
 
-    def _setup_test(self):
-        self.msg_log = []
-        self.launch_time = 0
-        self.clock = 0
-        self.deadline = 0
-        self.monitors = []
-        {% for class_name in monitor_classes %}
-        self.monitors.append({{ class_name }}(self.subs))
-        {% endfor %}
-        self.main_monitor = self.monitors[{{ monitor_classes.index(main_monitor) }}]
-        self.launches = []
-        self.trace_done = False
+{{ _setup_test(main_monitor, monitor_classes)|indent(width=4, first=true) }}
 
-{{ _setup_sut(commands, nodes, settings)|indent(width=4, first=true) }}
+{{ _setup_sut(commands, settings)|indent(width=4, first=true) }}
 
     def _teardown_sut(self):
         for launch in self.launches:
@@ -192,7 +230,7 @@ class TestTracer(unittest.TestCase):
 
     def _update(self, set_clock=False):
         if rospy.is_shutdown():
-            raise RuntimeError("rospy is shut down")
+            raise InconclusiveTestError.rospy_shutdown()
         for launch in self.launches:
             launch.spin_once()
         now = get_time()
@@ -202,25 +240,7 @@ class TestTracer(unittest.TestCase):
             monitor.update(now)
             assert not monitor.has_failed, monitor.HPL_PROPERTY
 
-    def _check_outcome(self, trace):
-        now = get_time()
-        if trace.ends_via_timeout:
-        {% if main_monitor.is_liveness %}
-            if trace.n_triggers > 0:
-                assert self.main_monitor.triggered, "invalid test"
-            if not self.main_monitor.at_least_once:
-                raise TestTimeoutError("timed out before a result")
-        {% endif %}
-            if self.main_monitor.active:
-                self.main_monitor._deactivate(now)
-        else:
-            assert not self.main_monitor.active, "failed to detect terminator"
-        {% if main_monitor.is_liveness %}
-            if trace.n_triggers > 0:
-                assert self.main_monitor.triggered, "invalid test"
-            assert self.main_monitor.at_least_once, self.main_monitor.HPL_PROPERTY
-        {% endif %}
-        assert not self.main_monitor.has_failed, self.main_monitor.HPL_PROPERTY
+{{ _check_outcome(is_liveness)|indent(width=4, first=true) }}
 
     def _wait_for_nodes(self, timeout=60.0, online=True):
         if online:
