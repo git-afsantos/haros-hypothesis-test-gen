@@ -41,16 +41,16 @@ else:
 chunks.append(Chunk())
 {% endif %}
 # ----- Activator -------------------------------------
-{% if activator.is_default %}
-    {% set strategy = msgs.strategy_name(activator.pkg, activator.msg) %}
+{% if p.strategy.is_default %}
+    {% set strategy = msgs.strategy_name(p.strategy.pkg, p.strategy.msg) %}
     {% set args = '' %}
 {% else %}
-    {% set strategy = activator.name %}
-    {% set args = activator.args|join(', ') %}
+    {% set strategy = p.strategy.name %}
+    {% set args = p.strategy.args|join(', ') %}
 {% endif %}
-msg = (draw({{ strategy }}({{ args }})), "{{ activator.topic }}")
-{% if activator.alias %}
-msg_{{ activator.alias }} = msg
+msg = (draw({{ strategy }}({{ args }})), "{{ p.strategy.topic }}")
+{% if p.strategy.alias %}
+msg_{{ p.strategy.alias }} = msg
 {% endif %}
 chunks[-1].messages.append(msg)
 chunks[-1].set_clock = True
@@ -105,7 +105,7 @@ chunks.append(chunk)
     {% set args = a.strategy.args|join(', ') %}
 {% endif %}
 # ----- Trigger ---------------------------------------
-elems = strategies.tuples({{ strategy }}({{ args }})), strategies.just("{{ strategy.topic }}"))
+elems = strategies.tuples({{ strategy }}({{ args }})), strategies.just("{{ a.strategy.topic }}"))
 triggers = draw(strategies.lists(elems, min_size={{ a.min_num }}, max_size={{ a.max_num }}))
 {% if a.min_num > 0 %}
 new_chunks = draw(chunk_splits(triggers))

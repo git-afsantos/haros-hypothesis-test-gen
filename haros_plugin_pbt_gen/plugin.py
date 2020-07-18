@@ -285,7 +285,8 @@ class TestGenerator(object):
             py_monitors = [m.python for m in ms]
             tests.append(TestTemplate(py_default_msgs, py_custom_msgs,
                 self._render_trace_strategy(p, strategies), py_monitors,
-                py_test_case, self.strategies.pkg_imports, monitor.hpl_string,))
+                py_test_case, self.strategies.pkg_imports,
+                monitors[i].hpl_string,))
         return tests
 
     def _get_test_monitors(self, i, monitors):
@@ -355,12 +356,12 @@ class TestGenerator(object):
         data = {
             "pkg_imports": test_template.pkg_imports,
             "default_msg_strategies": test_template.default_msg_strategies,
-            "custom_msg_strategies": test_case.custom_msg_strategies,
-            "trace_strategy": test_case.trace_strategy,
+            "custom_msg_strategies": test_template.custom_msg_strategies,
+            "trace_strategy": test_template.trace_strategy,
             "monitors": test_template.monitor_templates,
             "test_case": test_template.test_case_template,
             "log_level": "DEBUG",
-            "property_text": test_case.property_text,
+            "property_text": test_template.property_text,
         }
         if debug:
             python = self._render_template(
@@ -422,7 +423,7 @@ Strategies = namedtuple("Strategies", ("p", "q", "a", "b"))
 # publisher stages:
 #   - stage 1 [1+ chunks]: up to activator (if not launch)
 #   - stage 2 [1+ chunks]: up to trigger
-#   - stage 3 [0+ chunks]: after trigger (response and prevention)
+#   - stage 3 [0+ chunks]: after trigger
 
 # 'globally' and 'until' do not have stage 1
 # only 'requires', 'causes' and 'forbids' have stage 2
@@ -832,15 +833,14 @@ class Stage3Builder(StrategyBuilder):
 
     def build(self, prop):
         self.strategies = {}
-        if not (prop.pattern.is_response or prop.pattern.is_prevention):
-            return # other patterns do not have this stage
+        #if not (prop.pattern.is_response or prop.pattern.is_prevention):
+        #    return # other patterns do not have this stage
         self._build_randoms(prop.pattern.trigger, prop.scope.terminator)
 
     def _build_randoms(self, trigger, terminator):
-        assert trigger is not None
         for topic, data in self.topics.items():
             rostype, assumed = data
-            if topic == trigger.topic:
+            if trigger and topic == trigger.topic:
                 phi = trigger.predicate
                 if phi.is_vacuous:
                     continue # no random messages
