@@ -94,6 +94,7 @@ def _setup_sut(self):
             deadline=None)
 @given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
 def _test_hypothesis_properties(self, trace, hz):
+    self._eval_trace(trace, hz)
     passed = False
     self.n_examples += 1
     self._setup_test()
@@ -165,6 +166,19 @@ def _check_outcome(self, trace):
 {% endmacro %}
 
 
+{% macro _eval_trace(assumptions) %}
+def _eval_trace(self, trace, hz):
+{% if assumptions %}
+    self._time_analysis(trace, hz)
+    {% for name in assumptions %}
+    assume(eval_({{ name }}(trace)))
+    {% endfor %}
+{% else %}
+    pass
+{% endif %}
+{% endmacro %}
+
+
 {##############################################################################
  # Template Body
  ##############################################################################}
@@ -174,7 +188,7 @@ def _check_outcome(self, trace):
     the various property monitors and replaying a random trace given by
     hypothesis. #}
 
-{# expects (main_monitor, monitor_classes, publishers, subscribers, commands, nodes, settings, is_liveness) #}
+{# expects (main_monitor, monitor_classes, assumption_names, publishers, subscribers, commands, nodes, settings, is_liveness) #}
 
 
 class TestTracer(unittest.TestCase):
@@ -215,6 +229,27 @@ class TestTracer(unittest.TestCase):
                 self.n_examples, self.n_fail)
 
 {{ _test_hypothesis(settings, is_liveness)|indent(width=4, first=true) }}
+
+{{ _eval_trace(assumption_names)|indent(width=4, first=true) }}
+
+    def _time_analysis(self, trace, hz):
+        clock = 0.0
+        relative_clock = 0.0
+        sleep_time = 1.0 / hz
+        for chunk in trace.chunks:
+            delta = sleep_time
+            if chunk.delay > 0.0:
+                if chunk.relative_delay:
+                    t = relative_clock + chunk.delay
+                    if t > clock + delta:
+                        delta = t - clock
+                else:
+                    delta += chunk.delay
+            clock += delta
+            if chunk.set_clock:
+                relative_clock = clock
+            chunk._trace_time = clock
+            chunk._delta_time = delta
 
 {{ _setup_test(main_monitor, monitor_classes)|indent(width=4, first=true) }}
 

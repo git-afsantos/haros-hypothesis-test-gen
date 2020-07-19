@@ -273,6 +273,7 @@ class TestGenerator(object):
             data = {
                 "main_monitor": monitors[i].class_name,
                 "monitor_classes": [m.class_name for m in ms],
+                "assumption_names": [],
                 "publishers": self._get_publishers(),
                 "subscribers": self._get_subscribers(),
                 "commands": self.commands,

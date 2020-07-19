@@ -1,0 +1,50 @@
+{% import 'monitor.python.jinja' as rv %}
+
+{##############################################################################
+    PropertyMonitor Macros
+ ##############################################################################}
+
+{% macro _globally(monitor) -%}
+for chunk in trace.chunks:
+{%- endmacro %}
+
+{% macro _after_p(monitor) -%}
+scope = False
+for chunk in trace.chunks:
+    if scope:
+    else:
+{%- endmacro %}
+
+{% macro _until_q(monitor) -%}
+scope = True
+for chunk in trace.chunks:
+    if {{ }}:
+        return True
+{%- endmacro %}
+
+{% macro _after_p_until_q(monitor) -%}
+scopes = []
+
+{%- endmacro %}
+
+
+{##############################################################################
+    Template Body
+ ##############################################################################}
+
+def eval_{{ monitor.class_name }}(trace):
+    # {{ monitor.hpl_string }}
+{% if monitor.activator is none %}
+    {% if monitor.terminator is none %}
+{{ _globally(monitor)|indent(width=4, first=true) }}
+    {% else %}
+{{ _until_q(monitor)|indent(width=4, first=true) }}
+    {% endif %}
+{% else %}
+    {% if monitor.terminator is none %}
+{{ _after_p(monitor)|indent(width=4, first=true) }}
+    {% else %}
+{{ _after_p_until_q(monitor)|indent(width=4, first=true) }}
+    {% endif %}
+    return True
+{% endif %}
