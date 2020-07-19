@@ -1,30 +1,138 @@
 {% import 'monitor.python.jinja' as rv %}
 
 {##############################################################################
-    PropertyMonitor Macros
+    Pattern Monitor Macros
  ##############################################################################}
 
+{% macro _eval_absence(monitor) -%}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+{% if monitor.has_scope_timeout %}
+if scope_time >= {{ monitor.scope_timeout }}:
+    break # to the next scope
+{% endif %}
+{%- endmacro %}
+
+{% macro _eval_existence(monitor) -%}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+{% if monitor.has_scope_timeout %}
+if scope_time >= {{ monitor.scope_timeout }}:
+    return False
+{% endif %}
+{# must break if msg found #}
+{%- endmacro %}
+
+{% macro _eval_precedence(monitor) -%}
+{%- endmacro %}
+
+{% macro _eval_response(monitor) -%}
+{%- endmacro %}
+
+{% macro _eval_prevention(monitor) -%}
+{%- endmacro %}
+
+
+{##############################################################################
+    Property Monitor Macros
+ ##############################################################################}
+
+{% macro _initial_state(monitor) -%}
+{% if monitor.saved_vars -%}
+[None] * {{ monitor.saved_vars }}
+{%- else -%}
+()
+{%- endif %}
+{%- endmacro %}
+
+
+{% macro _chunk_contains(event) -%}
+{% set event = event.events[0] %}{# FIXME: this is a hammer -#}
+found = False
+for msg, topic in chunk.messages:
+    if topic == "{{ event.topic }}"{{ rv._inline_conditions(event.conditions) }}:
+        found = True
+{% if event.saved_vars %}
+    {% for key, msg_field in event.saved_vars.iteritems() %}
+        scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% endfor %}
+{% endif %}
+        break
+{%- endmacro %}
+
+
+{% macro _eval_scope(monitor, first=true) -%}
+{% if first %}
+scope_clock = 0.0 if not scope.chunks else -scope.chunks[0].delta_time
+{% else %}
+scope_clock = 0.0
+{% endif %}
+for i in range(len(scope.chunks)):
+    chunk = scope.chunks[i]
+    scope_clock += chunk.delta_time
+{% if monitor.is_absence %}
+{{ _eval_absence(monitor)|indent(width=4, first=true) }}
+{% elif monitor.is_existence %}
+{{ _eval_existence(monitor)|indent(width=4, first=true) }}
+else:
+    return False
+{% elif monitor.is_precedence %}
+{{ _eval_precedence(monitor)|indent(width=4, first=true) }}
+{% elif monitor.is_response %}
+{{ _eval_response(monitor)|indent(width=4, first=true) }}
+{% elif monitor.is_prevention %}
+{{ _eval_prevention(monitor)|indent(width=4, first=true) }}
+{% else %}
+    pass
+{% endif %}
+{%- endmacro %}
+
+
 {% macro _globally(monitor) -%}
-for chunk in trace.chunks:
+e = scope = EvalScope(trace.chunks, {{ _initial_state(monitor) }})
+{{ _eval_scope(monitor, first=false) }}
 {%- endmacro %}
 
 {% macro _after_p(monitor) -%}
-scope = False
-for chunk in trace.chunks:
-    if scope:
-    else:
+e = scope = EvalScope([], {{ _initial_state(monitor) }})
+for i in range(len(trace.chunks)):
+    chunk = trace.chunks[i]
+{{ _chunk_contains(monitor.activator)|indent(width=4, first=true) }}
+    if found:
+        scope.chunks.extend(trace.chunks[i:])
+        break
+{{ _eval_scope(monitor, first=true) }}
 {%- endmacro %}
 
 {% macro _until_q(monitor) -%}
-scope = True
-for chunk in trace.chunks:
-    if {{ }}:
-        return True
+e = scope = EvalScope(trace.chunks, {{ _initial_state(monitor) }})
+for i in range(len(trace.chunks)):
+    chunk = trace.chunks[i]
+{{ _chunk_contains(monitor.terminator)|indent(width=4, first=true) }}
+    if found:
+        scope = trace.chunks[:i]
+        break
+{{ _eval_scope(monitor, first=false) }}
 {%- endmacro %}
 
 {% macro _after_p_until_q(monitor) -%}
 scopes = []
-
+j = -1
+scope = EvalScope([], {{ _initial_state(monitor) }})
+for i in range(len(trace.chunks)):
+{{ _chunk_contains(monitor.activator)|indent(width=4, first=true) }}
+    if j < 0 and found:
+        j = i
+{{ _chunk_contains(monitor.terminator)|indent(width=4, first=true) }}
+    if j >= 0 and found:
+        scope.chunks.extend(trace.chunks[j:i])
+        scopes.append(scope)
+        scope = EvalScope([], {{ _initial_state(monitor) }})
+        j = -1
+if j >= 0:
+    scope.chunks.extend(trace.chunks[j:])
+    scopes.append(scope)
+for scope in scopes:
+    e = scope
+{{ _eval_scope(monitor, first=true)|indent(width=4, first=true) }}
 {%- endmacro %}
 
 
@@ -34,6 +142,7 @@ scopes = []
 
 def eval_{{ monitor.class_name }}(trace):
     # {{ monitor.hpl_string }}
+    e = _StateHolder([None] * {{ monitor.saved_vars }})
 {% if monitor.activator is none %}
     {% if monitor.terminator is none %}
 {{ _globally(monitor)|indent(width=4, first=true) }}

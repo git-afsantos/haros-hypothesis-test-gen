@@ -223,7 +223,8 @@ class MonitorTemplate(object):
     __slots__ = ("index", "uid", "class_name", "is_liveness", "is_safety",
                  "events", "subs", "aliases", "activator", "terminator",
                  "trigger", "behaviour", "scope_timeout", "hpl_string",
-                 "is_prevention", "python")
+                 "is_absence", "is_existence", "is_prevention", "is_response",
+                 "is_precedence", "python")
 
     _n = 0
 
@@ -237,6 +238,10 @@ class MonitorTemplate(object):
         self.class_name = "Monitor" + self.index # string
         self.is_liveness = hpl_property.is_liveness # bool
         self.is_safety = hpl_property.is_safety # bool
+        self.is_absence = hpl_property.pattern.is_absence # bool
+        self.is_existence = hpl_property.pattern.is_existence # bool
+        self.is_precedence = hpl_property.pattern.is_requirement # bool
+        self.is_response = hpl_property.pattern.is_response # bool
         self.is_prevention = hpl_property.pattern.is_prevention # bool
         self.events = [] # [EventTemplate]
         self.aliases = {} # {string (alias): EventTemplate}

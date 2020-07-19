@@ -349,6 +349,9 @@ class PropertyMonitor(object):
         raise NotImplementedError("subclasses must override this method")
 
 
+EvalScope = namedtuple("EvalScope", ("chunks", "state",))
+
+
 ################################################################################
 # Property Monitors
 ################################################################################
