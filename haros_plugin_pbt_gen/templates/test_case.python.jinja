@@ -98,7 +98,8 @@ def _setup_sut(self):
 
 {% macro _test_hypothesis(settings, is_liveness) %}
 @settings(max_examples={{ settings['max_examples']|d(1000, true) }}, {# -#}
-            deadline=None)
+            deadline=None,
+          suppress_health_check=(HealthCheck.filter_too_much, HealthCheck.too_slow))
 @given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
 def _test_hypothesis_properties(self, trace, hz):
     self._eval_trace(trace, hz)
@@ -112,7 +113,7 @@ def _test_hypothesis_properties(self, trace, hz):
         return
     try:
         self.trace_start_time = get_time()
-        for rep in trace.repetitions:
+        for rep in range(trace.repetitions):
             for chunk in trace:
                 if chunk.delay > 0.0:
                     if chunk.relative_delay:
