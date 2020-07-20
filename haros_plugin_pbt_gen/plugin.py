@@ -158,7 +158,7 @@ class TestGenerator(object):
     def make_tests(self, config_num):
         hpl_properties = self._filter_properties()
         monitors, axioms = self._make_monitors(hpl_properties)
-        tests = self._make_test_templates(hpl_properties, monitors, axioms)
+        tests = self._make_test_templates(monitors, axioms)
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
@@ -258,11 +258,10 @@ class TestGenerator(object):
                 "monitor.python.jinja", data, strip=True)
         return monitors, axioms
 
-    def _make_test_templates(self, hpl_properties, monitors, axioms):
-        assert len(hpl_properties) == len(monitors)
+    def _make_test_templates(self, monitors, axioms):
         tests = []
         for i in range(len(monitors)):
-            p = hpl_properties[i]
+            p = monitors[i].hpl_property
             try:
                 strategies = self.strategies.build_strategies(p)
                 py_default_msgs = self._render_template(

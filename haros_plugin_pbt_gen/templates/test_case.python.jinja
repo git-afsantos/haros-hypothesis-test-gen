@@ -178,7 +178,7 @@ def _eval_trace(self, trace, hz):
 {% if axiom_classes %}
     self._time_analysis(trace, hz)
     {% for class_name in axiom_classes %}
-    assume(eval_({{ class_name }}(trace)))
+    assume(eval_{{ class_name }}(trace))
     {% endfor %}
 {% else %}
     pass

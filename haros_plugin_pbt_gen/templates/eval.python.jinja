@@ -1,4 +1,4 @@
-{% import 'monitor.python.jinja' as rv %}
+{% import 'rv_common.python.jinja' as rv %}
 
 {##############################################################################
     Pattern Monitor Macros
@@ -28,7 +28,7 @@ if found:
 {% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
 {% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
 for msg, topic in chunk.messages:
-    if topic == "{{ b.topic }}"{{ rv._inline_conditions(b.conditions) }}:
+    if topic == "{{ b.topic }}"{{ rv.inline_conditions(b.conditions) }}:
 {% if a.has_log_age %}
         clock = 0.0
 {% endif %}
@@ -43,7 +43,7 @@ for msg, topic in chunk.messages:
 {% endif %}
             for msg, topic in chunk2.messages:
                 if topic == "{{ a.topic }}"{# -#}
-                        {{ rv._inline_conditions(a.conditions) }}:
+                        {{ rv.inline_conditions(a.conditions) }}:
 {% if b.dep_conditions.get(a.key()) %}
     {% if a.saved_vars %}
                     entry = scope
@@ -52,7 +52,7 @@ for msg, topic in chunk.messages:
         {% endfor %}
     {% endif %}
                     if True{# -#}
-                    {{ _inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
+                    {{ rv.inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
                         safe = True
                         break
 {% else %}
@@ -69,7 +69,7 @@ for msg, topic in chunk.messages:
 {% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
 {% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
 for msg, topic in chunk.messages:
-    if topic == "{{ a.topic }}"{{ rv._inline_conditions(a.conditions) }}:
+    if topic == "{{ a.topic }}"{{ rv.inline_conditions(a.conditions) }}:
 {% if a.saved_vars %}
     {% for key, msg_field in a.saved_vars.iteritems() %}
         scope.state[{{ key }}] = msg.{{ msg_field }}
@@ -87,7 +87,7 @@ for msg, topic in chunk.messages:
 {% endif %}
             for msg, topic in chunk2.messages:
                 if topic == "{{ b.topic }}"{# -#}
-                        {{ rv._inline_conditions(b.conditions) }}:
+                        {{ rv.inline_conditions(b.conditions) }}:
                     break
         else:
             return False
@@ -97,7 +97,7 @@ for msg, topic in chunk.messages:
 {% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
 {% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
 for msg, topic in chunk.messages:
-    if topic == "{{ a.topic }}"{{ rv._inline_conditions(a.conditions) }}:
+    if topic == "{{ a.topic }}"{{ rv.inline_conditions(a.conditions) }}:
 {% if a.saved_vars %}
     {% for key, msg_field in a.saved_vars.iteritems() %}
         scope.state[{{ key }}] = msg.{{ msg_field }}
@@ -115,7 +115,7 @@ for msg, topic in chunk.messages:
 {% endif %}
             for msg, topic in chunk2.messages:
                 if topic == "{{ b.topic }}"{# -#}
-                        {{ rv._inline_conditions(b.conditions) }}:
+                        {{ rv.inline_conditions(b.conditions) }}:
                     return False
 {%- endmacro %}
 
@@ -137,7 +137,7 @@ for msg, topic in chunk.messages:
 {% set event = event.events[0] %}{# FIXME: this is a hammer -#}
 found = False
 for msg, topic in chunk.messages:
-    if topic == "{{ event.topic }}"{{ rv._inline_conditions(event.conditions) }}:
+    if topic == "{{ event.topic }}"{{ rv.inline_conditions(event.conditions) }}:
         found = True
 {% if event.saved_vars %}
     {% for key, msg_field in event.saved_vars.iteritems() %}
@@ -231,7 +231,6 @@ for scope in scopes:
 
 def eval_{{ monitor.class_name }}(trace):
     # {{ monitor.hpl_string }}
-    e = _StateHolder([None] * {{ monitor.saved_vars }})
 {% if monitor.activator is none %}
     {% if monitor.terminator is none %}
 {{ _globally(monitor)|indent(width=4, first=true) }}
