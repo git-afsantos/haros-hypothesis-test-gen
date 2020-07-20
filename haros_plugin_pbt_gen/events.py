@@ -232,7 +232,7 @@ class MonitorTemplate(object):
                  "events", "subs", "aliases", "activator", "terminator",
                  "trigger", "behaviour", "scope_timeout", "hpl_string",
                  "is_absence", "is_existence", "is_prevention", "is_response",
-                 "is_precedence", "python")
+                 "is_precedence", "python", "python_eval", "is_input_only")
 
     _n = 0
 
@@ -262,6 +262,8 @@ class MonitorTemplate(object):
         self.subs = self._make_subs(hpl_property, pubbed_topics, subbed_topics)
         self.hpl_string = str(hpl_property)
         self.python = "raise NotImplementedError('monitor not implemented')"
+        self.python_eval= ""
+        self.is_input_only = all(e.topic in subbed_topics for e in self.events)
 
     @property
     def saved_vars(self):

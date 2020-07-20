@@ -12,6 +12,7 @@ def setUp(self):
     roslaunch.configure_logging(uuid)
     self.launches = []
     self.monitors = []
+    self.axioms = []
     self.msg_log = []
     self.subs = {}
     {% for sub in subscribers %}
@@ -34,7 +35,7 @@ def setUp(self):
     self.clock = 0
 {% endmacro %}
 
-{% macro _setup_test(main_monitor, monitor_classes) %}
+{% macro _setup_test(main_monitor, monitor_classes, axiom_classes) %}
 def _setup_test(self):
     self.msg_log = []
     self.launch_time = 0
@@ -45,6 +46,10 @@ def _setup_test(self):
     self.monitors.append({{ class_name }}(self.subs))
     {% endfor %}
     self.main_monitor = self.monitors[{{ monitor_classes.index(main_monitor) }}]
+    self.axioms = []
+    {% for class_name in axiom_classes %}
+    self.axioms.append({{ class_name }}(self.subs))
+    {% endfor %}
     self.launches = []
     self.trace_done = False
 {% endmacro %}
@@ -85,6 +90,8 @@ def _setup_sut(self):
     self.deadline = self.launch_time + {# defaults to 15 seconds -#}
         {{ settings['deadline']|d(15, true) }}
     for monitor in self.monitors:
+        monitor.on_launch(self.launch_time)
+    for monitor in self.axioms:
         monitor.on_launch(self.launch_time)
 {% endmacro %}
 
@@ -166,12 +173,12 @@ def _check_outcome(self, trace):
 {% endmacro %}
 
 
-{% macro _eval_trace(assumptions) %}
+{% macro _eval_trace(axiom_classes) %}
 def _eval_trace(self, trace, hz):
-{% if assumptions %}
+{% if axiom_classes %}
     self._time_analysis(trace, hz)
-    {% for name in assumptions %}
-    assume(eval_({{ name }}(trace)))
+    {% for class_name in axiom_classes %}
+    assume(eval_({{ class_name }}(trace)))
     {% endfor %}
 {% else %}
     pass
@@ -188,13 +195,13 @@ def _eval_trace(self, trace, hz):
     the various property monitors and replaying a random trace given by
     hypothesis. #}
 
-{# expects (main_monitor, monitor_classes, assumption_names, publishers, subscribers, commands, nodes, settings, is_liveness) #}
+{# expects (main_monitor, monitor_classes, axiom_classes, publishers, subscribers, commands, nodes, settings, is_liveness) #}
 
 
 class TestTracer(unittest.TestCase):
     __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
                  "launches", "trace_done", "trace_start_time", "msg_log",
-                 "n_examples", "n_fail", "times", "clock")
+                 "n_examples", "n_fail", "times", "clock", "axioms")
 
     NODES = {{ nodes }}
 
@@ -230,7 +237,7 @@ class TestTracer(unittest.TestCase):
 
 {{ _test_hypothesis(settings, is_liveness)|indent(width=4, first=true) }}
 
-{{ _eval_trace(assumption_names)|indent(width=4, first=true) }}
+{{ _eval_trace(axiom_classes)|indent(width=4, first=true) }}
 
     def _time_analysis(self, trace, hz):
         clock = 0.0
@@ -251,7 +258,7 @@ class TestTracer(unittest.TestCase):
             chunk._trace_time = clock
             chunk._delta_time = delta
 
-{{ _setup_test(main_monitor, monitor_classes)|indent(width=4, first=true) }}
+{{ _setup_test(main_monitor, monitor_classes, axiom_classes)|indent(width=4, first=true) }}
 
 {{ _setup_sut(commands, settings)|indent(width=4, first=true) }}
 
@@ -274,6 +281,9 @@ class TestTracer(unittest.TestCase):
         for monitor in self.monitors:
             monitor.update(now)
             assert not monitor.has_failed, monitor.HPL_PROPERTY
+        for monitor in self.axioms:
+            monitor.update(now)
+            assume(not monitor.has_failed)
 
 {{ _check_outcome(is_liveness)|indent(width=4, first=true) }}
 

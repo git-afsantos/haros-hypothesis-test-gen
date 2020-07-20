@@ -110,8 +110,8 @@ PublisherTemplate = namedtuple("PublisherTemplate",
 
 TestTemplate = namedtuple("TestTemplate",
     ("default_msg_strategies", "custom_msg_strategies",
-     "trace_strategy", "monitor_templates", "test_case_template",
-     "pkg_imports", "property_text"))
+     "trace_strategy", "monitor_templates",
+     "test_case_template", "pkg_imports", "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
@@ -157,12 +157,12 @@ class TestGenerator(object):
 
     def make_tests(self, config_num):
         hpl_properties = self._filter_properties()
-        monitors = self._make_monitors(hpl_properties)
-        tests = self._make_test_templates(hpl_properties, monitors)
+        monitors, axioms = self._make_monitors(hpl_properties)
+        tests = self._make_test_templates(hpl_properties, monitors, axioms)
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
-            self._write_test_files(tests[i], filename)
+            self._write_test_files(tests[i], filename, axioms)
         if not tests:
             msg = "None of the given properties for {} is directly testable."
             msg = msg.format(self.config.name)
@@ -233,6 +233,7 @@ class TestGenerator(object):
         return subs
 
     def _make_monitors(self, hpl_properties):
+        axioms = []
         monitors = []
         for i in range(len(hpl_properties)):
             p = hpl_properties[i]
@@ -241,7 +242,13 @@ class TestGenerator(object):
                 uid, p, self.pubbed_topics, self.subbed_topics)
             self._apply_slack(monitor)
             monitor.variable_substitution()
-            monitors.append(monitor)
+            if monitor.is_input_only:
+                axioms.append(monitor)
+                data = {"monitor": monitor}
+                monitor.python_eval = self._render_template(
+                    "eval.python.jinja", data, strip=True)
+            else:
+                monitors.append(monitor)
             data = {
                 "monitor": monitor,
                 "slack": self.settings.get("slack", 0.0),
@@ -249,9 +256,9 @@ class TestGenerator(object):
             }
             monitor.python = self._render_template(
                 "monitor.python.jinja", data, strip=True)
-        return monitors
+        return monitors, axioms
 
-    def _make_test_templates(self, hpl_properties, monitors):
+    def _make_test_templates(self, hpl_properties, monitors, axioms):
         assert len(hpl_properties) == len(monitors)
         tests = []
         for i in range(len(monitors)):
@@ -273,7 +280,7 @@ class TestGenerator(object):
             data = {
                 "main_monitor": monitors[i].class_name,
                 "monitor_classes": [m.class_name for m in ms],
-                "assumption_names": [],
+                "axiom_classes": [m.class_name for m in axioms],
                 "publishers": self._get_publishers(),
                 "subscribers": self._get_subscribers(),
                 "commands": self.commands,
@@ -353,13 +360,15 @@ class TestGenerator(object):
             if event.external_timer is not None:
                 event.external_timer += slack
 
-    def _write_test_files(self, test_template, filename, debug=False):
+    def _write_test_files(self, test_template, filename, axioms, debug=False):
         data = {
             "pkg_imports": test_template.pkg_imports,
             "default_msg_strategies": test_template.default_msg_strategies,
             "custom_msg_strategies": test_template.custom_msg_strategies,
             "trace_strategy": test_template.trace_strategy,
             "monitors": test_template.monitor_templates,
+            "axioms": [m.python for m in axioms],
+            "eval_functions": [m.python_eval for m in axioms],
             "test_case": test_template.test_case_template,
             "log_level": "DEBUG",
             "property_text": test_template.property_text,
