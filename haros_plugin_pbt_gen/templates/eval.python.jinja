@@ -5,29 +5,118 @@
  ##############################################################################}
 
 {% macro _eval_absence(monitor) -%}
-{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
 {% if monitor.has_scope_timeout %}
 if scope_time >= {{ monitor.scope_timeout }}:
     break # to the next scope
 {% endif %}
+{{ _chunk_contains(monitor.behaviour) }}
+if found:
+    return False
 {%- endmacro %}
 
 {% macro _eval_existence(monitor) -%}
-{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
 {% if monitor.has_scope_timeout %}
 if scope_time >= {{ monitor.scope_timeout }}:
     return False
 {% endif %}
-{# must break if msg found #}
+{{ _chunk_contains(monitor.behaviour) }}
+if found:
+    break
 {%- endmacro %}
 
 {% macro _eval_precedence(monitor) -%}
+{% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+for msg, topic in chunk.messages:
+    if topic == "{{ b.topic }}"{{ rv._inline_conditions(b.conditions) }}:
+{% if a.has_log_age %}
+        clock = 0.0
+{% endif %}
+        safe = False
+        b_msg = msg
+        for j in range(i - 1, -1, -1):
+            chunk2 = scope.chunks[j]
+{% if a.has_log_age %}
+            clock += scope.chunks[j+1].delta_time
+            if clock > {{ a.log_age }}:
+                return False
+{% endif %}
+            for msg, topic in chunk2.messages:
+                if topic == "{{ a.topic }}"{# -#}
+                        {{ rv._inline_conditions(a.conditions) }}:
+{% if b.dep_conditions.get(a.key()) %}
+    {% if a.saved_vars %}
+                    entry = scope
+        {% for key, msg_field in a.saved_vars.iteritems() %}
+                    scope.state[{{ key }}] = msg.{{ msg_field }}
+        {% endfor %}
+    {% endif %}
+                    if True{# -#}
+                    {{ _inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
+                        safe = True
+                        break
+{% else %}
+                    safe = True
+                    break
+{% endif %}
+            if safe:
+                break # stop searching the past
+        else:
+            return False
 {%- endmacro %}
 
 {% macro _eval_response(monitor) -%}
+{% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+for msg, topic in chunk.messages:
+    if topic == "{{ a.topic }}"{{ rv._inline_conditions(a.conditions) }}:
+{% if a.saved_vars %}
+    {% for key, msg_field in a.saved_vars.iteritems() %}
+        scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% endfor %}
+{% endif %}
+{% if b.has_duration %}
+        clock = 0.0
+{% endif %}
+        for j in range(i + 1, len(scope.chunks)):
+            chunk2 = scope.chunks[j]
+{% if b.has_duration %}
+            clock += chunk2.delta_time
+            if clock > {{ b.duration }}:
+                return False
+{% endif %}
+            for msg, topic in chunk2.messages:
+                if topic == "{{ b.topic }}"{# -#}
+                        {{ rv._inline_conditions(b.conditions) }}:
+                    break
+        else:
+            return False
 {%- endmacro %}
 
 {% macro _eval_prevention(monitor) -%}
+{% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+for msg, topic in chunk.messages:
+    if topic == "{{ a.topic }}"{{ rv._inline_conditions(a.conditions) }}:
+{% if a.saved_vars %}
+    {% for key, msg_field in a.saved_vars.iteritems() %}
+        scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% endfor %}
+{% endif %}
+{% if b.has_duration %}
+        clock = 0.0
+{% endif %}
+        for j in range(i + 1, len(scope.chunks)):
+            chunk2 = scope.chunks[j]
+{% if b.has_duration %}
+            clock += chunk2.delta_time
+            if clock > {{ b.duration }}:
+                break
+{% endif %}
+            for msg, topic in chunk2.messages:
+                if topic == "{{ b.topic }}"{# -#}
+                        {{ rv._inline_conditions(b.conditions) }}:
+                    return False
 {%- endmacro %}
 
 

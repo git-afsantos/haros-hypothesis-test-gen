@@ -124,6 +124,14 @@ class EventTemplate(object):
     def msg_type(self):
         return self.type_token.type_name
 
+    @property
+    def has_duration(self):
+        return self.duration >= 0.0 and self.duration < INF
+
+    @property
+    def has_log_age(self):
+        return self.log_age >= 0.0 and self.log_age < INF
+
     def key(self):
         return self.uid[:-1]
 
