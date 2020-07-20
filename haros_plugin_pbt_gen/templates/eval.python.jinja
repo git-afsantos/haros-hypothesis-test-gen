@@ -37,7 +37,7 @@ for msg, topic in chunk.messages:
         for j in range(i - 1, -1, -1):
             chunk2 = scope.chunks[j]
 {% if a.has_log_age %}
-            clock += scope.chunks[j+1].delta_time
+            clock += scope.chunks[j+1]._delta_time
             if clock > {{ a.log_age }}:
                 return False
 {% endif %}
@@ -81,7 +81,7 @@ for msg, topic in chunk.messages:
         for j in range(i + 1, len(scope.chunks)):
             chunk2 = scope.chunks[j]
 {% if b.has_duration %}
-            clock += chunk2.delta_time
+            clock += chunk2._delta_time
             if clock > {{ b.duration }}:
                 return False
 {% endif %}
@@ -109,7 +109,7 @@ for msg, topic in chunk.messages:
         for j in range(i + 1, len(scope.chunks)):
             chunk2 = scope.chunks[j]
 {% if b.has_duration %}
-            clock += chunk2.delta_time
+            clock += chunk2._delta_time
             if clock > {{ b.duration }}:
                 break
 {% endif %}
@@ -150,13 +150,13 @@ for msg, topic in chunk.messages:
 
 {% macro _eval_scope(monitor, first=true) -%}
 {% if first %}
-scope_clock = 0.0 if not scope.chunks else -scope.chunks[0].delta_time
+scope_clock = 0.0 if not scope.chunks else -scope.chunks[0]._delta_time
 {% else %}
 scope_clock = 0.0
 {% endif %}
 for i in range(len(scope.chunks)):
     chunk = scope.chunks[i]
-    scope_clock += chunk.delta_time
+    scope_clock += chunk._delta_time
 {% if monitor.is_absence %}
 {{ _eval_absence(monitor)|indent(width=4, first=true) }}
 {% elif monitor.is_existence %}
