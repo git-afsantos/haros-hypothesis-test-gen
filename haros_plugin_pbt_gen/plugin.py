@@ -536,7 +536,7 @@ class StrategyManager(object):
             assert p.pattern.is_absence
             assert topic in publishers
             phi = event.predicate.negate()
-            rostype = self.publishers.get(topic)
+            rostype = publishers.get(topic)
             if rostype is not None:
                 prev = topics.get(topic)
                 if prev is not None:
@@ -548,7 +548,7 @@ class StrategyManager(object):
         r = {}
         for event in assumptions:
             topic = event.topic
-            rostype = self.publishers.get(topic)
+            rostype = publishers.get(topic)
             if rostype is not None:
                 r[topic] = (rostype, event.predicate)
         for topic, rostype in publishers.items():

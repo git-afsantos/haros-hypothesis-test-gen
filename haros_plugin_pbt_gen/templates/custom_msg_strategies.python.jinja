@@ -34,7 +34,7 @@ def {{ strategy.name }}(draw):
 {% endif %}
     msg = {{ strategy.pkg }}.{{ strategy.msg }}()
 {% for statement in strategy.statements %}
-{{ _render_statement(statement)|indent(width=4, first=True) }}
+{{ _statement(statement)|indent(width=4, first=True) }}
 {% endfor %}
     return msg
 {% endmacro %}
