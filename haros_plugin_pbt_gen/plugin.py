@@ -136,15 +136,10 @@ class TestGenerator(object):
         self.commands = config.launch_commands
         self.subbed_topics = self._get_open_subbed_topics()
         self.pubbed_topics = self._get_all_pubbed_topics()
-        assumptions = []
-        for p in config.hpl_assumptions:
-            if p.is_fully_typed():
-                assumptions.append(p)
-            else:
-                self.iface.log_warning(
-                    "Skipping untyped assumption:\n{}".format(p))
+        assumptions = self._get_assumptions()
+        data_axioms = self._get_data_axioms()
         self.strategies = StrategyManager(self.subbed_topics, assumptions,
-            deadline=settings.get("deadline"))
+            data_axioms, deadline=settings.get("deadline"))
         self.jinja_env = Environment(
             loader=PackageLoader(KEY, "templates"),
             line_statement_prefix=None,
@@ -415,6 +410,32 @@ class TestGenerator(object):
             text = text.strip()
         return text
 
+    def _get_assumptions(self):
+        assumptions = []
+        for p in self.config.hpl_assumptions:
+            if p.is_fully_typed():
+                assumptions.append(p)
+            else:
+                self.iface.log_warning(
+                    "Skipping untyped assumption:\n{}".format(p))
+        return assumptions
+
+    def _get_data_axioms(self):
+        axioms = []
+        for p in self.config.hpl_properties:
+            if not p.scope.is_global:
+                continue # FIXME
+            if not p.pattern.is_absence:
+                continue
+            if not p.pattern.behaviour.topic in self.subbed_topics:
+                continue
+            if not p.is_fully_typed():
+                self.iface.log_warning(
+                    "Skipping untyped assumption:\n{}".format(p))
+                continue
+            axioms.append(p)
+        return axioms
+
 
 ################################################################################
 # Strategy Building
@@ -440,13 +461,15 @@ Strategies = namedtuple("Strategies", ("p", "q", "a", "b"))
 class StrategyManager(object):
     __slots__ = ("stage1", "stage2", "stage3", "terminator", "deadline")
 
-    def __init__(self, pubs, assumptions, deadline=10.0):
+    def __init__(self, pubs, assumptions, data_axioms, deadline=10.0):
         # pubs: topic -> ROS type token
         # assumptions: [HplAssumption]
+        # data_axioms: [HplProperty]
         default_strategies = {}
         pkg_imports = {"std_msgs"}
         # topic -> (type token, predicate)
-        topics = self._mapping(pubs, assumptions)
+        topics = self._mapping_hpl_assumptions(pubs, assumptions)
+        self._mapping_hpl_axioms(topics, pubs, data_axioms)
         self.stage1 = Stage1Builder(topics, default_strategies, pkg_imports)
         self.stage2 = Stage2Builder(topics, default_strategies, pkg_imports)
         self.stage3 = Stage3Builder(topics, default_strategies, pkg_imports)
@@ -506,7 +529,22 @@ class StrategyManager(object):
         b = StrategyB(list(self.stage3.strategies.values()), b_timeout)
         return Strategies(p, q, a, b)
 
-    def _mapping(self, publishers, assumptions):
+    def _mapping_hpl_axioms(self, topics, publishers, axioms):
+        for p in axioms:
+            event = p.pattern.behaviour
+            topic = event.topic
+            assert p.pattern.is_absence
+            assert topic in publishers
+            phi = event.predicate.negate()
+            rostype = self.publishers.get(topic)
+            if rostype is not None:
+                prev = topics.get(topic)
+                if prev is not None:
+                    assert prev[0] == rostype
+                    phi = prev[1].join(phi)
+                topics[topic] = (rostype, phi)
+
+    def _mapping_hpl_assumptions(self, publishers, assumptions):
         r = {}
         for event in assumptions:
             topic = event.topic
