@@ -164,16 +164,21 @@ def convert_to_old_format(phi):
                     if not x.is_accessor:
                         raise StrategyError(
                             "general LHS operands are not implemented")
-                    if not (y.is_accessor or y.is_value):
+                    if not (y.is_accessor or y.is_value or
+                            (y.is_operator and y.operator == "-")):
                         raise StrategyError(
-                            "general RHS operands are not implemented")
+                            "general RHS operands are not implemented: "
+                            + str(phi))
                     while not y.is_value and y.is_operator:
                         assert y.operator == "-"
                         n = not n
                         y = y.operand
                     if y.is_value and y.is_literal and n:
                         y = HplLiteral("-" + y.token, -y.value)
-                    conditions.append(expr)
+                        conditions.append(
+                            HplBinaryOperator(expr.operator, x, y))
+                    else:
+                        conditions.append(expr)
                 elif expr.operator == "in":
                     x = expr.operand1
                     y = expr.operand2
