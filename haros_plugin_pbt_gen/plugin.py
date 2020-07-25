@@ -171,6 +171,25 @@ class TestGenerator(object):
                 self.iface.log_warning(
                     "Skipping untyped property:\n{}".format(p))
                 continue
+            if p.scope.activator is not None:
+                topic = p.scope.activator.topic
+                if topic not in self.subbed_topics:
+                    if topic not in self.pubbed_topics:
+                        continue
+            if p.scope.terminator is not None:
+                topic = p.scope.terminator.topic
+                if topic not in self.subbed_topics:
+                    if topic not in self.pubbed_topics:
+                        continue
+            if p.pattern.trigger is not None:
+                topic = p.pattern.trigger.topic
+                if topic not in self.subbed_topics:
+                    if topic not in self.pubbed_topics:
+                        continue
+            topic = p.pattern.behaviour.topic
+            if topic not in self.subbed_topics:
+                if topic not in self.pubbed_topics:
+                    continue
             properties.append(p)
         return properties
 
@@ -271,12 +290,13 @@ class TestGenerator(object):
                     "Cannot produce a test for:\n'{}'\n\n{}".format(p, e))
                 continue
             ms = self._get_test_monitors(i, monitors)
+            subs = self._get_subscribers()
             data = {
                 "main_monitor": monitors[i].class_name,
                 "monitor_classes": [m.class_name for m in ms],
                 "axiom_classes": [m.class_name for m in axioms],
                 "publishers": self._get_publishers(),
-                "subscribers": self._get_subscribers(),
+                "subscribers": subs,
                 "commands": self.commands,
                 "nodes": self.node_names,
                 "settings": self.settings,
@@ -285,10 +305,12 @@ class TestGenerator(object):
             py_test_case = self._render_template(
                 "test_case.python.jinja", data, strip=True)
             py_monitors = [m.python for m in ms]
+            pkg_imports = self.strategies.pkg_imports
+            for sub in subs:
+                pkg_imports.add(sub.type_token.package)
             tests.append(TestTemplate(py_default_msgs, py_custom_msgs,
                 self._render_trace_strategy(p, strategies), py_monitors,
-                py_test_case, self.strategies.pkg_imports,
-                monitors[i].hpl_string,))
+                py_test_case, pkg_imports, monitors[i].hpl_string,))
         return tests
 
     def _get_test_monitors(self, i, monitors):
@@ -427,13 +449,17 @@ class TestGenerator(object):
                 continue # FIXME
             if not p.pattern.is_absence:
                 continue
-            if not p.pattern.behaviour.topic in self.subbed_topics:
+            b = p.pattern.behaviour
+            if not b.topic in self.subbed_topics:
                 continue
             if not p.is_fully_typed():
                 self.iface.log_warning(
                     "Skipping untyped assumption:\n{}".format(p))
                 continue
-            axioms.append(p)
+            if b.predicate.is_vacuous and b.predicate.is_true:
+                del self.subbed_topics[b.topic]
+            else:
+                axioms.append(p)
         return axioms
 
 
@@ -534,15 +560,15 @@ class StrategyManager(object):
             event = p.pattern.behaviour
             topic = event.topic
             assert p.pattern.is_absence
-            assert topic in publishers
-            phi = event.predicate.negate()
-            rostype = publishers.get(topic)
-            if rostype is not None:
-                prev = topics.get(topic)
-                if prev is not None:
-                    assert prev[0] == rostype
-                    phi = prev[1].join(phi)
-                topics[topic] = (rostype, phi)
+            if topic in publishers:
+                phi = event.predicate.negate()
+                rostype = publishers.get(topic)
+                if rostype is not None:
+                    prev = topics.get(topic)
+                    if prev is not None:
+                        assert prev[0] == rostype
+                        phi = prev[1].join(phi)
+                    topics[topic] = (rostype, phi)
 
     def _mapping_hpl_assumptions(self, publishers, assumptions):
         r = {}
@@ -573,7 +599,9 @@ class StrategyBuilder(object):
             if phi.is_true:
                 return self._default_strategy(rostype, topic=topic)
             else:
-                raise StrategyError("unsatisfiable predicate")
+                raise StrategyError(
+                    "unsatisfiable predicate for '{}' ({}, '{}')".format(
+                        topic, rostype, fun_name))
         # FIXME remove this and remake the strategy generator
         conditions = convert_to_old_format(phi.condition)
         strategy = self._msg_generator(rostype, conditions)
@@ -794,6 +822,8 @@ class Stage1Builder(StrategyBuilder):
                     self.strategies[topic] = self._build(
                         rostype, phi, topic=topic, fun_name="s1cs")
             else: # random topic
+                if assumed.is_vacuous and not assumed.is_true:
+                    continue # no random messages
                 self.strategies[topic] = self._build(
                     rostype, assumed, topic=topic, fun_name="s1cs")
 
@@ -867,6 +897,8 @@ class Stage2Builder(StrategyBuilder):
                     self.strategies[topic] = self._build(
                         rostype, phi, topic=topic, fun_name="s2cs")
             else: # random topic
+                if assumed.is_vacuous and not assumed.is_true:
+                    continue # no random messages
                 self.strategies[topic] = self._build(
                     rostype, assumed, topic=topic, fun_name="s2cs")
 
@@ -911,6 +943,8 @@ class Stage3Builder(StrategyBuilder):
                     self.strategies[topic] = self._build(
                         rostype, phi, topic=topic, fun_name="s3cs")
             else: # random topic
+                if assumed.is_vacuous and not assumed.is_true:
+                    continue # no random messages
                 self.strategies[topic] = self._build(
                     rostype, assumed, topic=topic, fun_name="s3cs")
 

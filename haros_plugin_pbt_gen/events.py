@@ -245,6 +245,8 @@ class MonitorTemplate(object):
         self.index = str(MonitorTemplate._n) # string
         self.uid = uid # string
         self.class_name = "Monitor" + self.index # string
+        self.hpl_property = hpl_property
+        self.hpl_string = str(hpl_property)
         self.is_liveness = hpl_property.is_liveness # bool
         self.is_safety = hpl_property.is_safety # bool
         self.is_absence = hpl_property.pattern.is_absence # bool
@@ -261,11 +263,9 @@ class MonitorTemplate(object):
         self._set_events(hpl_property)
         self._annotate_events(pubbed_topics, subbed_topics)
         self.subs = self._make_subs(hpl_property, pubbed_topics, subbed_topics)
-        self.hpl_string = str(hpl_property)
         self.python = "raise NotImplementedError('monitor not implemented')"
         self.python_eval= ""
         self.is_input_only = all(e.topic in subbed_topics for e in self.events)
-        self.hpl_property = hpl_property
 
     @property
     def saved_vars(self):
@@ -535,7 +535,7 @@ class MonitorTemplate(object):
             if event.topic in pubbed_topics:
                 event.type_token = pubbed_topics[event.topic]
             else:
-                assert event.topic in subbed_topics
+                assert event.topic in subbed_topics, self.hpl_string
                 event.is_external = True
                 event.type_token = subbed_topics[event.topic]
 

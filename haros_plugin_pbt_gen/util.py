@@ -85,8 +85,8 @@ def convert_to_old_format(phi):
                         x = expr.operand1
                         y = expr.operand2
                         n = False
-                        while not y.is_value and y.is_operator:
-                            assert y.operator == "-"
+                        while (not y.is_value and y.is_operator
+                                and y.operator == "-"):
                             n = not n
                             y = y.operand
                         if y.is_value and y.is_literal and n:
@@ -125,8 +125,8 @@ def convert_to_old_format(phi):
                                 vs = []
                                 for v in y.values:
                                     n = False
-                                    while not v.is_value and v.is_operator:
-                                        assert v.operator == "-"
+                                    while (not v.is_value and v.is_operator
+                                            and v.operator == "-"):
                                         n = not n
                                         v = v.operand
                                     if v.is_value and v.is_literal and n:
@@ -141,8 +141,8 @@ def convert_to_old_format(phi):
                                 # FIXME
                                 vmin = y.min_value
                                 n = False
-                                while not vmin.is_value and vmin.is_operator:
-                                    assert vmin.operator == "-"
+                                while (not vmin.is_value and vmin.is_operator
+                                        and vmin.operator == "-"):
                                     n = not n
                                     vmin = vmin.operand
                                 if vmin.is_value and vmin.is_literal and n:

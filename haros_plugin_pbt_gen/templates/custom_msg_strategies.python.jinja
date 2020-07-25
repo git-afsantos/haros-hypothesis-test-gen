@@ -68,16 +68,17 @@ def {{ strategy.name }}(draw):
 {% endif %}
 
 {% if q.strategy %}
-    {% for strategy in q.spam %}
-        {% if not strategy.is_default %}
-{{ custom_msg(strategy) }}
-        {% endif %}
-    {% endfor %}
     {% if not q.strategy.is_default %}
 
 {{ custom_msg(q.strategy) }}
     {% endif %}
 {% endif %}
+
+{% for strategy in b.spam %}
+    {% if not strategy.is_default %}
+{{ custom_msg(strategy) }}
+    {% endif %}
+{% endfor %}
 
 {% if a.strategy %}
     {% for strategy in a.spam %}
