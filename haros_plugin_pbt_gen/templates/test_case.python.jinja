@@ -387,5 +387,7 @@ class TestTracer(unittest.TestCase):
                     note("<< {} received on {}".format(age, topic))
                 if topic != p_topic or msg != p_msg:
                     note(str(msg))
+                else:
+                    note("(same as above)")
                 p_topic = topic
                 p_msg = msg
