@@ -125,7 +125,7 @@ if all_msgs:
         new_chunks[i].messages.append(msg)
         i = (i + 1) % len(new_chunks)
     {% endif %}
-{% else %} {# a.min_num == 0 #}
+{% else %}{# a.min_num == 0 #}
 if triggers:
     new_chunks = draw(chunk_splits(triggers))
     chunks.extend(new_chunks)

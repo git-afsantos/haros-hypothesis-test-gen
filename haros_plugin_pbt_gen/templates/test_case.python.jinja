@@ -30,6 +30,7 @@ def setUp(self):
         {{ pub.rospy_type }}, self.subs["{{ pub.topic }}"])
     {% endfor %}
     self.n_examples = 0
+    self.first_fail = None
     self.n_fail = 0
     self.times = []
     self.clock = 0
@@ -144,6 +145,8 @@ def _test_hypothesis_properties(self, trace, hz):
         self.times.append(get_time() - self.launch_time)
         if not passed:
             self.n_fail += 1
+            if self.first_fail is None:
+                self.first_fail = self.n_examples
             print "[Example #{}]: FAIL".format(self.n_examples)
         self._report_msg_log()
         self._teardown_sut()
@@ -202,7 +205,8 @@ def _eval_trace(self, trace, hz):
 class TestTracer(unittest.TestCase):
     __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
                  "launches", "trace_done", "trace_start_time", "msg_log",
-                 "n_examples", "n_fail", "times", "clock", "axioms")
+                 "n_examples", "n_fail", "times", "clock", "axioms",
+                 "first_fail")
 
     NODES = {{ nodes }}
 
@@ -235,6 +239,9 @@ class TestTracer(unittest.TestCase):
                 print "Total time:", s
             print "Number of examples: {} ({} failures)".format(
                 self.n_examples, self.n_fail)
+            if self.first_fail is not None:
+                print "First failure at example #{} ({} shrink attempts)".format(
+                    self.first_fail, (self.n_examples - self.first_fail))
 
 {{ _test_hypothesis(settings, is_liveness)|indent(width=4, first=true) }}
 
