@@ -105,7 +105,7 @@ chunks.append(chunk)
     {% set args = a.strategy.args|join(', ') %}
 {% endif %}
 # ----- Trigger ---------------------------------------
-elems = strategies.tuples({{ strategy }}({{ args }})), strategies.just("{{ a.strategy.topic }}"))
+elems = strategies.tuples({{ strategy }}({{ args }}), strategies.just("{{ a.strategy.topic }}"))
 triggers = draw(strategies.lists(elems, min_size={{ a.min_num }}, max_size={{ a.max_num }}))
 {% if a.min_num > 0 %}
 new_chunks = draw(chunk_splits(triggers))
