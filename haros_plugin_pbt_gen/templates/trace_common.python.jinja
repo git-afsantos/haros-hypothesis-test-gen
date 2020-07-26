@@ -123,7 +123,7 @@ if all_msgs:
     i = 0
     for msg in all_msgs:
         new_chunks[i].messages.append(msg)
-        i += 1
+        i = (i + 1) % len(new_chunks)
     {% endif %}
 {% else %} {# a.min_num == 0 #}
 if triggers:
@@ -141,7 +141,7 @@ if triggers:
         i = 0
         for msg in all_msgs:
             new_chunks[i].messages.append(msg)
-            i += 1
+            i = (i + 1) % len(new_chunks)
     {% endif %}
 {% endif %}
 {%- endmacro %}
