@@ -272,8 +272,9 @@ class TestTracer(unittest.TestCase):
 {{ _setup_sut(commands, settings)|indent(width=4, first=true) }}
 
     def _teardown_sut(self):
-        for launch in self.launches:
-            launch.shutdown()
+        with HiddenPrints():
+            for launch in self.launches:
+                launch.shutdown()
         for sub in self.subs.values():
             sub.reset()
         self._wait_for_nodes(online=False)
