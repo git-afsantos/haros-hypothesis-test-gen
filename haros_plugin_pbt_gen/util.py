@@ -161,6 +161,10 @@ def convert_to_old_format(phi):
                 if expr.operator == "and":
                     stack.append(expr.operand1)
                     stack.append(expr.operand2)
+                elif expr.operator == "or":
+                    # FIXME: 'or' should be handled at runtime in the template
+                    # HAMMER: just choose the first operand
+                    stack.append(expr.operand1)
                 elif expr.operator in relational:
                     x = expr.operand1
                     y = expr.operand2
