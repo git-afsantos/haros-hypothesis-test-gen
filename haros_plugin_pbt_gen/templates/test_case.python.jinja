@@ -58,31 +58,31 @@ def _setup_test(self):
 
 {% macro _setup_sut(commands, settings) %}
 def _setup_sut(self):
+    with HiddenPrints():
     {% for cmd in commands %}
-    {# uuid = rospy.get_param("/run_id") #}
-    uuid = roslaunch.rlutil.get_or_generate_uuid(None, True)
+        {# uuid = rospy.get_param("/run_id") #}
+        uuid = roslaunch.rlutil.get_or_generate_uuid(None, True)
         {% if cmd.command == 'roslaunch' %}
-    launch = roslaunch.parent.ROSLaunchParent(uuid,
-        ["{{ cmd.args[0] }}"],
-        is_core=False, verbose=False)
-    launch.start(auto_terminate=False)
-    self.launches.append(launch)
+        launch = roslaunch.parent.ROSLaunchParent(uuid,
+            ["{{ cmd.args[0] }}"],
+            is_core=False, verbose=False)
+        launch.start(auto_terminate=False)
         {% elif cmd.command == 'rosrun' %}
-    launch = roslaunch.parent.ROSLaunchParent(uuid, [],
-        is_core=False, verbose=False)
+        launch = roslaunch.parent.ROSLaunchParent(uuid, [],
+            is_core=False, verbose=False)
             {% if cmd.args|length >= 3 %}
-    node = roslaunch.core.Node("{{ cmd.args[0] }}", "{{ cmd.args[1] }}",
-        name="{{ cmd.args[2] }}")
+        node = roslaunch.core.Node("{{ cmd.args[0] }}", "{{ cmd.args[1] }}",
+            name="{{ cmd.args[2] }}")
             {% else %}
-    node = roslaunch.core.Node("{{ cmd.args[0] }}", "{{ cmd.args[1] }}")
+        node = roslaunch.core.Node("{{ cmd.args[0] }}", "{{ cmd.args[1] }}")
             {% endif %}
-    launch.start()
-    process, success = launch.runner.launch_node(node)
+        launch.start()
+        process, success = launch.runner.launch_node(node)
     if not success:
         raise RuntimeError("failed to launch {{ cmd.args[0] }}/{# -#}
             {{ cmd.args[1] }}")
-    self.launches.append(launch)
         {% endif %}
+    self.launches.append(launch)
     {% endfor %}
     self._wait_for_nodes()
     self._wait_for_interfaces()
@@ -107,6 +107,7 @@ def _test_hypothesis_properties(self, trace, hz):
     passed = False
     self.n_examples += 1
     self._setup_test()
+    print "[Example #{}]: Launching SUT...".format(self.n_examples)
     self._setup_sut()
     self.trace_done = False
     rate = rospy.Rate(hz)
