@@ -100,14 +100,14 @@ for msg, topic in chunk.messages:
         scope.state[{{ key }}] = msg.{{ msg_field }}
     {% endfor %}
 {% endif %}
-{% if b.has_duration %}
+{% if b.is_under_timer %}
         clock = -chunk._delta_time
 {% endif %}
         for j in range(i, len(scope.chunks)):
             chunk2 = scope.chunks[j]
-{% if b.has_duration %}
+{% if b.is_under_timer %}
             clock += chunk2._delta_time
-            if clock > {{ b.duration }}:
+            if clock > {{ a.external_timer }}:
                 return False
 {% endif %}
             for msg, topic in chunk2.messages:
@@ -130,14 +130,14 @@ for msg, topic in chunk.messages:
         scope.state[{{ key }}] = msg.{{ msg_field }}
     {% endfor %}
 {% endif %}
-{% if b.has_duration %}
+{% if b.is_under_timer %}
         clock = 0.0
 {% endif %}
         for j in range(i + 1, len(scope.chunks)):
             chunk2 = scope.chunks[j]
-{% if b.has_duration %}
+{% if b.is_under_timer %}
             clock += chunk2._delta_time
-            if clock > {{ b.duration }}:
+            if clock > {{ a.external_timer }}:
                 break
 {% endif %}
             for msg, topic in chunk2.messages:
