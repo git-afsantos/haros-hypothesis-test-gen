@@ -50,7 +50,7 @@ chunks.append(Chunk())
 {% endif %}
 msg = (draw({{ strategy }}({{ args }})), "{{ p.strategy.topic }}")
 {% if p.strategy.alias %}
-msg_{{ p.strategy.alias }} = msg
+msg_{{ p.strategy.alias }} = msg[0]
 {% endif %}
 chunks[-1].messages.append(msg)
 chunks[-1].set_clock = True
