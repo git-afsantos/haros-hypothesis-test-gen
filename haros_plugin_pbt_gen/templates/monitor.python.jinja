@@ -348,7 +348,7 @@ def on_launch(self, time):
     self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
             {% endfor %}
         {% endif %}
-        {% if monitor.is_precedence %}
+        {% if monitor.is_precedence or monitor.is_absence or monitor.is_existence %}
             {% for event in monitor.behaviour.roots %}
     self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
             {% endfor %}
