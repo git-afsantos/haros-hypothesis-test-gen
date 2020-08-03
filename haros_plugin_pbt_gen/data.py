@@ -391,6 +391,10 @@ class FieldGenerator(object):
             self.strategy = _EqualTo(self._ready_ref, value)
 
     def neq(self, value):
+        if self.strategy.is_enum:
+            if value in self.strategy.values:
+                self.strategy.values.remove(value)
+        assert len(self.strategy.values) > 0
         self.assumptions.append(_Assumption(self._init_ref, value, "!="))
 
     def lt(self, value):
@@ -428,10 +432,20 @@ class FieldGenerator(object):
     def in_set(self, values):
         if self.strategy.is_enum:
             common = set(self.strategy.values) & set(values)
+            for assumption in self.assumptions:
+                if assumption.operator == "!=":
+                    if assumption.value in common:
+                        common.remove(assumption.value)
             assert len(common) > 0
             self.strategy = _SampledFrom(self._ready_ref, common)
         elif not self.strategy.is_constant:
-            self.strategy = _SampledFrom(self._ready_ref, values)
+            new_values = list(values)
+            for assumption in self.assumptions:
+                if assumption.operator == "!=":
+                    if assumption.value in new_values:
+                        new_values.remove(assumption.value)
+            assert len(new_values) > 0
+            self.strategy = _SampledFrom(self._ready_ref, new_values)
 
     def not_in(self, values):
         for value in values:
@@ -1283,7 +1297,10 @@ class _SampledFrom(_Strategy):
                 and all(value.available(build_number) for value in self.values))
 
     def build(self):
-        value = RandomSample(map(str, self.values))
+        if len(self.values) > 1:
+            value = RandomSample(map(str, self.values))
+        else:
+            value = str(self.values[0])
         statement = Assignment(self.field.field.expression, value)
         return self._enclosing_loops(statement)
 
@@ -1312,8 +1329,11 @@ class _SampledFrom(_Strategy):
         return False
 
     def _template(self):
-        return "strategies.sampled_from(({},))".format(
-            ", ".join(str(value) for value in self.values))
+        if len(self.values) > 1:
+            return "strategies.sampled_from(({},))".format(
+                ", ".join(str(value) for value in self.values))
+        else:
+            return "strategies.just({})".format(self.values[0])
 
 
 ################################################################################
