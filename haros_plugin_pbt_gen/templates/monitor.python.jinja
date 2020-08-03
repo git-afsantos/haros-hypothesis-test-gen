@@ -254,6 +254,7 @@ def _on_cb{{ i }}(self, msg, time=None):
     # topic: {{ topic }}
     time = get_time() if time is None else time
     with self.lock:
+        active = self.active
     {% if has_timeout %}
         if time > self.scope_max_time:
             self._deactivate(self.scope_max_time)
@@ -272,10 +273,10 @@ def _on_cb{{ i }}(self, msg, time=None):
         {% elif event.is_trigger and event.is_leaf %}
         self.trigger_count += forks
         {% elif event.is_activator and event.is_leaf %}
-        if forks:
+        if forks and not active:
             self._activate(time)
         {% elif event.is_terminator and event.is_leaf %}
-        if forks:
+        if forks and active:
             self._deactivate(time)
         {% endif %}
     {% else %}
