@@ -103,6 +103,8 @@ def _setup_sut(self):
           suppress_health_check=(HealthCheck.filter_too_much, HealthCheck.too_slow))
 @given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
 def _test_hypothesis_properties(self, trace, hz):
+    if rospy.is_shutdown():
+        return
     self._eval_trace(trace, hz)
     passed = False
     self.n_examples += 1

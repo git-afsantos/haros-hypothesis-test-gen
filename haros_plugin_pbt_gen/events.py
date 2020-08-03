@@ -275,6 +275,41 @@ class MonitorTemplate(object):
     def has_scope_timeout(self):
         return self.scope_timeout < INF
 
+    def apply_slack(self, slack):
+        assert slack >= 0.0
+        if slack == 0.0:
+            return
+        if self.activator is not None:
+            for event in self.activator.events:
+                event.duration += slack
+        if self.terminator is not None:
+            for event in self.terminator.events:
+                event.duration += slack
+        if self.is_absence:
+            for event in self.behaviour.events:
+                event.delay += slack
+        elif self.is_existence:
+            for event in self.behaviour.events:
+                event.duration += slack
+        elif self.is_precedence:
+            for event in self.trigger.events:
+                event.duration += slack
+                event.log_age += slack
+            for event in self.behaviour.events:
+                event.delay += slack
+        elif self.is_response:
+            for event in self.trigger.events:
+                event.duration += slack
+                if event.external_timer is not None:
+                    event.external_timer += slack
+            for event in self.behaviour.events:
+                event.duration += slack
+        elif self.is_prevention:
+            for event in self.trigger.events:
+                event.duration += slack
+            for event in self.behaviour.events:
+                event.delay += slack
+
     def _set_events(self, hpl_property):
         scope = hpl_property.scope
         pattern = hpl_property.pattern

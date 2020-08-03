@@ -370,11 +370,7 @@ class TestGenerator(object):
         slack = self.settings.get("slack", 0.0)
         if slack < 0.0:
             raise ValueError("slack time cannot be negative")
-        for event in monitor.events:
-            event.duration += slack
-            event.log_age += slack
-            if event.external_timer is not None:
-                event.external_timer += slack
+        monitor.apply_slack(slack)
 
     def _write_test_files(self, test_template, filename, axioms, debug=False):
         data = {
