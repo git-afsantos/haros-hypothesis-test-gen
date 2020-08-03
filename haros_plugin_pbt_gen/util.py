@@ -84,7 +84,7 @@ def convert_to_old_format(phi):
                     elif expr.operator == "and":
                         # FIXME: should be an 'or' handled by the template
                         # HAMMER: just choose the first
-                        stack.append(expr.operand1)
+                        stack.append(HplUnaryOperator("not", expr.operand1))
                     else:
                         x = expr.operand1
                         y = expr.operand2
