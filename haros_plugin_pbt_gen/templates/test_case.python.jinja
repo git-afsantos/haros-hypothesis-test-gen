@@ -311,12 +311,13 @@ class TestTracer(unittest.TestCase):
             rate.sleep()
             now = get_time()
         pending = list(self.NODES)
-        while now < end and pending and not rospy.is_shutdown():
-            node_name = pending.pop()
-            if not rosnode_ping(node_name, max_count=1) is online:
-                pending.append(node_name)
-                rate.sleep()
-            now = get_time()
+        with HiddenPrints():
+            while now < end and pending and not rospy.is_shutdown():
+                node_name = pending.pop()
+                if not rosnode_ping(node_name, max_count=1) is online:
+                    pending.append(node_name)
+                    rate.sleep()
+                now = get_time()
         if pending and not rospy.is_shutdown():
             if online:
                 raise LookupError("Failed to find nodes " + str(pending))
