@@ -489,14 +489,18 @@ class StrategyManager(object):
         # data_axioms: [HplProperty]
         default_strategies = {}
         pkg_imports = {"std_msgs"}
+        types_by_msg = {}
         # topic -> (type token, predicate)
         topics = self._mapping_hpl_assumptions(pubs, assumptions)
         self._mapping_hpl_axioms(topics, pubs, data_axioms)
-        self.stage1 = Stage1Builder(topics, default_strategies, pkg_imports)
-        self.stage2 = Stage2Builder(topics, default_strategies, pkg_imports)
-        self.stage3 = Stage3Builder(topics, default_strategies, pkg_imports)
-        self.terminator = TerminatorBuilder(topics,
-            default_strategies, pkg_imports)
+        self.stage1 = Stage1Builder(topics, default_strategies,
+            pkg_imports, types_by_msg)
+        self.stage2 = Stage2Builder(topics, default_strategies,
+            pkg_imports, types_by_msg)
+        self.stage3 = Stage3Builder(topics, default_strategies,
+            pkg_imports, types_by_msg)
+        self.terminator = TerminatorBuilder(topics, default_strategies,
+            pkg_imports, types_by_msg)
         self.deadline = deadline
 
     @property
@@ -583,8 +587,8 @@ class StrategyBuilder(object):
     __slots__ = ("types_by_message", "counter", "default_strategies",
                  "pkg_imports")
 
-    def __init__(self, default_strategies, pkg_imports):
-        self.types_by_message = {}
+    def __init__(self, default_strategies, pkg_imports, type_map):
+        self.types_by_message = type_map
         self.counter = 0
         self.default_strategies = default_strategies
         self.pkg_imports = pkg_imports
@@ -641,7 +645,7 @@ class StrategyBuilder(object):
         selector = Selector(str(condition.operand1), type_token)
         try:
             value = self._value(condition.operand2, strategy, type_token)
-        except KeyError:
+        except KeyError as e:
             return
         if condition.operator == "=":
             strategy.set_eq(selector, value)
@@ -679,7 +683,11 @@ class StrategyBuilder(object):
                 ros_literal = type_token.constants.get(expr.field)
                 if ros_literal is not None:
                     return ros_literal.value
-            selector = Selector(str(expr), type_token)
+            # It's hammer time!
+            str_expr = str(expr)
+            if str_expr.startswith("@"):
+                str_expr = str_expr.split(".", 1)[-1]
+            selector = Selector(str_expr, type_token)
             if msg.is_this_msg:
                 return selector
             return strategy.make_msg_arg(msg.name, selector)
@@ -783,8 +791,9 @@ class Stage1Builder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + (
         "topics", "strategies", "activator")
 
-    def __init__(self, topics, default_strategies, pkg_imports):
-        super(Stage1Builder, self).__init__(default_strategies, pkg_imports)
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(Stage1Builder, self).__init__(
+            default_strategies, pkg_imports, type_map)
         self.topics = topics
 
     def build(self, prop):
@@ -828,8 +837,9 @@ class Stage2Builder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + (
         "topics", "strategies", "trigger")
 
-    def __init__(self, topics, default_strategies, pkg_imports):
-        super(Stage2Builder, self).__init__(default_strategies, pkg_imports)
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(Stage2Builder, self).__init__(
+            default_strategies, pkg_imports, type_map)
         self.topics = topics
 
     def build(self, prop):
@@ -902,8 +912,9 @@ class Stage2Builder(StrategyBuilder):
 class Stage3Builder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + ("topics", "strategies")
 
-    def __init__(self, topics, default_strategies, pkg_imports):
-        super(Stage3Builder, self).__init__(default_strategies, pkg_imports)
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(Stage3Builder, self).__init__(
+            default_strategies, pkg_imports, type_map)
         self.topics = topics
 
     def build(self, prop):
@@ -948,8 +959,9 @@ class Stage3Builder(StrategyBuilder):
 class TerminatorBuilder(StrategyBuilder):
     __slots__ = StrategyBuilder.__slots__ + ("topics", "terminator")
 
-    def __init__(self, topics, default_strategies, pkg_imports):
-        super(TerminatorBuilder, self).__init__(default_strategies, pkg_imports)
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(TerminatorBuilder, self).__init__(
+            default_strategies, pkg_imports, type_map)
         self.topics = topics
         self.terminator = None
 
