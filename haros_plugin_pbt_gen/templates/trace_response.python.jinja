@@ -12,9 +12,12 @@ def traces(draw):
 {% endif %}
 {{ trace.gen_triggers(a, b)|indent(width=4, first=true) }}
 {% if q.strategy %}{# after-until or until #}
+{% set ends_via_timeout = 'False' %}
 {{ trace.gen_terminator(q, 0.0, 2 * b.timeout)|indent(width=4, first=true) }}
 {% else %}
+{% set ends_via_timeout = 'True' %}
     # Property scope is terminated at shutdown.
 {{ trace.gen_delay_chunk(0.0, 2 * b.timeout, relative_delay=true)|indent(width=4, first=true) }}
 {% endif %}
-    return Trace(chunks, reps={{ reps|default(1) }})
+    return Trace(chunks, reps={{ reps|default(1) }}, {# -#}
+                 ends_via_timeout={{ ends_via_timeout }})

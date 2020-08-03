@@ -192,16 +192,18 @@ class HiddenPrints(object):
 ################################################################################
 
 class Trace(object):
-    __slots__ = ("chunks", "repetitions")
+    __slots__ = ("chunks", "repetitions", "_ends_via_timeout")
 
-    def __init__(self, chunks, reps=1):
+    def __init__(self, chunks, reps=1, ends_via_timeout=True):
         self.chunks = chunks
         self.repetitions = reps
+        self._ends_via_timeout = ends_via_timeout
 
     @property
     def ends_via_timeout(self):
-        return (not self.chunks
-            or (not self.chunks[-1].messages and self.chunks[-1].delay > 0.0))
+        #return (not self.chunks
+        #    or (not self.chunks[-1].messages and self.chunks[-1].delay > 0.0))
+        return self._ends_via_timeout
 
     @property
     def n_triggers(self):
