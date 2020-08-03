@@ -277,22 +277,23 @@ def chunk_splits(draw, msgs):
  #     (with setattr() in a loop, potentially); or
  #  2. we hard-code each subclass, potentially increasing code duplication,
  #     but gaining some efficiency. #}
+class EventListenerInstance(object):
+    __slots__ = ("min_time", "max_time", "seq_start", "other_max_time",
+        "state", "matches", "subsumed")
+
+    def __init__(self, min_time, max_time, seq_start, state,
+                 other_max_time=inf):
+        self.min_time = min_time
+        self.max_time = max_time
+        self.seq_start = seq_start
+        self.other_max_time = other_max_time
+        self.state = state
+        self.matches = 0
+        self.subsumed = False
+
+
 class EventListener(object):
     __slots__ = ("active",)
-
-    class EventListenerInstance(object):
-        __slots__ = ("min_time", "max_time", "seq_start", "other_max_time",
-            "state", "matches", "subsumed")
-
-        def __init__(self, min_time, max_time, seq_start, state,
-                     other_max_time=inf):
-            self.min_time = min_time
-            self.max_time = max_time
-            self.seq_start = seq_start
-            self.other_max_time = other_max_time
-            self.state = state
-            self.matches = 0
-            self.subsumed = False
 
     DELAY = 0.0
     DURATION = inf
@@ -301,8 +302,9 @@ class EventListener(object):
         self.active = []
 
     def add(self, time, state, seq_start, other_max_time):
-        self.active.append(self.EventListenerInstance(time + self.DELAY,
-            time + self.DURATION, seq_start, state, other_max_time))
+        self.active.append(EventListenerInstance(time + self.DELAY,
+            time + self.DURATION, seq_start, state,
+            other_max_time=other_max_time))
 
     def update(self, time):
         timed_out = 0

@@ -427,20 +427,18 @@ class MonitorTemplate(object):
     def _link_events(self):
         assert self.behaviour is not None
         if self.activator is not None:
-            if self.trigger is None:
-                if self.is_liveness:
-                    for event in self.activator.leaves:
-                        event.forks.extend(self.behaviour.roots)
-            else:
-                for event in self.activator.leaves:
-                    event.forks.extend(self.trigger.roots)
-            if self.is_safety and not self.is_prevention:
+            if self.is_absence or self.is_existence or self.is_precedence:
                 for event in self.activator.leaves:
                     event.forks.extend(self.behaviour.roots)
+            if self.is_precedence or self.is_response or self.is_prevention:
+                assert self.trigger is not None
+                for event in self.activator.leaves:
+                    event.forks.extend(self.trigger.roots)
             if self.terminator is not None:
                 for event in self.activator.leaves:
                     event.forks.extend(self.terminator.roots)
-        if self.trigger is not None and (self.is_liveness or self.is_prevention):
+        if self.is_response or self.is_prevention:
+            assert self.trigger is not None
             for event in self.trigger.leaves:
                 event.forks.extend(self.behaviour.roots)
 
