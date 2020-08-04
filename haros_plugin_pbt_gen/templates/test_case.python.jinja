@@ -31,6 +31,7 @@ def setUp(self):
     {% endfor %}
     self.n_examples = 0
     self.first_fail = None
+    self.counterexample_size = -1
     self.n_fail = 0
     self.times = []
     self.clock = 0
@@ -209,7 +210,7 @@ class TestTracer(unittest.TestCase):
     __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
                  "launches", "trace_done", "trace_start_time", "msg_log",
                  "n_examples", "n_fail", "times", "clock", "axioms",
-                 "first_fail")
+                 "first_fail", "counterexample_size")
 
     NODES = {{ nodes }}
 
@@ -245,6 +246,8 @@ class TestTracer(unittest.TestCase):
             if self.first_fail is not None:
                 print "First failure at example #{} ({} shrink attempts)".format(
                     self.first_fail, (self.n_examples - self.first_fail))
+                print "Counterexample trace size: {} messages".format(
+                    self.counterexample_size)
 
 {{ _test_hypothesis(settings, is_liveness)|indent(width=4, first=true) }}
 
@@ -375,6 +378,7 @@ class TestTracer(unittest.TestCase):
         self.msg_log.append((topic, msg, time, sent))
 
     def _report_msg_log(self):
+        self.counterexample_size = 0
         if not self.msg_log:
             note("No messages were sent or received.")
         else:
@@ -395,6 +399,7 @@ class TestTracer(unittest.TestCase):
                         age = "@ {}s".format(age)
                 if sent:
                     note(">> {} sent on {}".format(age, topic))
+                    self.counterexample_size += 1
                 else:
                     note("<< {} received on {}".format(age, topic))
                 if topic != p_topic or msg != p_msg:

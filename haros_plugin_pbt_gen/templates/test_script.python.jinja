@@ -209,6 +209,10 @@ class Trace(object):
     def n_triggers(self):
         return sum(1 for chunk in self.chunks if chunk.contains_trigger)
 
+    @property
+    def n_messages(self):
+        return sum(len(chunk.messages) for chunk in self.chunks)
+
     def __len__(self):
         return len(self.chunks)
 
