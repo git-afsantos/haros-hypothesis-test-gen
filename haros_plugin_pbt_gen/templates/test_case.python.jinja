@@ -30,6 +30,7 @@ def setUp(self):
         {{ pub.rospy_type }}, self.subs["{{ pub.topic }}"])
     {% endfor %}
     self.n_examples = 0
+    self.n_failed_assumptions = 0
     self.first_fail = None
     self.counterexample_size = -1
     self.n_fail = 0
@@ -54,6 +55,7 @@ def _setup_test(self):
     {% endfor %}
     self.launches = []
     self.trace_done = False
+    self.assumptions_ok = True
 {% endmacro %}
 
 
@@ -139,19 +141,21 @@ def _test_hypothesis_properties(self, trace, hz):
         self.trace_done = True
         self._check_status()
         self._update()
+        assumptions_ok = True
         self._check_outcome(trace)
         passed = True
         print "[Example #{}]: OK".format(self.n_examples)
-    {#except AssertionError as e:
-    #    self._report_trace(trace, hz)
-    #    raise e #}
     finally:
         self.times.append(get_time() - self.launch_time)
-        if not passed:
-            self.n_fail += 1
-            if self.first_fail is None:
-                self.first_fail = self.n_examples
-            print "[Example #{}]: FAIL".format(self.n_examples)
+        if self.assumptions_ok:
+            if not passed:
+                self.n_fail += 1
+                if self.first_fail is None:
+                    self.first_fail = self.n_examples
+                print "[Example #{}]: FAIL".format(self.n_examples)
+        else:
+            self.n_failed_assumptions += 1
+            print "[Example #{}]: INVALID".format(self.n_examples)
         self._report_msg_log()
         self._teardown_sut()
 {% endmacro %}
@@ -185,9 +189,13 @@ def _check_outcome(self, trace):
 def _eval_trace(self, trace, hz):
 {% if axiom_classes %}
     self._time_analysis(trace, hz)
+    try:
     {% for class_name in axiom_classes %}
-    assume(eval_{{ class_name }}(trace))
+        assume(eval_{{ class_name }}(trace))
     {% endfor %}
+    except UnsatisfiedAssumption as e:
+        self.assumptions_ok = False
+        raise e
 {% else %}
     pass
 {% endif %}
@@ -210,7 +218,8 @@ class TestTracer(unittest.TestCase):
     __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
                  "launches", "trace_done", "trace_start_time", "msg_log",
                  "n_examples", "n_fail", "times", "clock", "axioms",
-                 "first_fail", "counterexample_size")
+                 "first_fail", "counterexample_size", "assumptions_ok",
+                 "n_failed_assumptions")
 
     NODES = {{ nodes }}
 
@@ -234,6 +243,7 @@ class TestTracer(unittest.TestCase):
         try:
             self.n_examples = 0
             self.n_fail = 0
+            self.n_failed_assumptions = 0
             self._test_hypothesis_properties()
         finally:
             if self.times:
@@ -243,6 +253,8 @@ class TestTracer(unittest.TestCase):
                 print "Total time:", s
             print "Number of examples: {} ({} failures)".format(
                 self.n_examples, self.n_fail)
+            print "Number of failed assumptions: {}".format(
+                self.n_failed_assumptions)
             if self.first_fail is not None:
                 print "First failure at example #{} ({} shrink attempts)".format(
                     self.first_fail, (self.n_examples - self.first_fail))
@@ -296,9 +308,13 @@ class TestTracer(unittest.TestCase):
         for monitor in self.monitors:
             monitor.update(now)
             assert not monitor.has_failed, monitor.HPL_PROPERTY
-        for monitor in self.axioms:
-            monitor.update(now)
-            assume(not monitor.has_failed)
+        try:
+            for monitor in self.axioms:
+                monitor.update(now)
+                assume(not monitor.has_failed)
+        except UnsatisfiedAssumption as e:
+            self.assumptions_ok = False
+            raise e
 
 {{ _check_outcome(is_liveness)|indent(width=4, first=true) }}
 
