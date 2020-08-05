@@ -17,7 +17,7 @@ def traces(draw):
 {% else %}
 {% set ends_via_timeout = 'True' %}
     # Property scope is terminated at shutdown.
-{{ trace.gen_delay_chunk(0.0, 2 * b.timeout, relative_delay=true)|indent(width=4, first=true) }}
+{{ trace.gen_delay_chunk(b.timeout, 2 * b.timeout, relative_delay=true)|indent(width=4, first=true) }}
 {% endif %}
     return Trace(chunks, reps={{ reps|default(1) }}, {# -#}
                  ends_via_timeout={{ ends_via_timeout }})
