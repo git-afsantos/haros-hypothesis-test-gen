@@ -691,9 +691,16 @@ class StrategyBuilder(object):
             if msg.is_this_msg:
                 return selector
             return strategy.make_msg_arg(msg.name, selector)
-        assert expr.is_value
+        n = False
+        while not expr.is_value and expr.is_operator and expr.operator == "-":
+            n = not n
+            expr = expr.operand
+        assert expr.is_value, repr(expr)
         if expr.is_literal:
-            return expr.value
+            if n:
+                return -expr.value
+            else:
+                return expr.value
         if expr.is_range:
             return (self._value(expr.min_value, strategy, type_token),
                     self._value(expr.max_value, strategy, type_token))
