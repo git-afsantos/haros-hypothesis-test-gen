@@ -394,7 +394,7 @@ class FieldGenerator(object):
         if self.strategy.is_enum:
             if value in self.strategy.values:
                 self.strategy.values.remove(value)
-        assert len(self.strategy.values) > 0
+            assert len(self.strategy.values) > 0
         self.assumptions.append(_Assumption(self._init_ref, value, "!="))
 
     def lt(self, value):
