@@ -602,6 +602,7 @@ class StrategyBuilder(object):
                 raise StrategyError(
                     "unsatisfiable predicate for '{}' ({}, '{}')".format(
                         topic, rostype, fun_name))
+        self._add_default_strategy_for_type(rostype)
         # FIXME remove this and remake the strategy generator
         conditions = convert_to_old_format(phi.condition)
         strategy = self._msg_generator(rostype, conditions)
@@ -613,6 +614,11 @@ class StrategyBuilder(object):
             rostype.message, strategy.build(), False, topic, alias)
 
     def _default_strategy(self, rostype, topic=None):
+        self._add_default_strategy_for_type(rostype)
+        return MsgStrategy(rostype.type_name.replace("/", "_"),
+            (), rostype.package, rostype.message, (), True, topic, None)
+
+    def _add_default_strategy_for_type(self, rostype):
         assert rostype.is_message
         if rostype.type_name not in self.default_strategies:
             stack = [rostype]
@@ -628,8 +634,6 @@ class StrategyBuilder(object):
                 self.pkg_imports.add(type_token.package)
                 self.default_strategies[type_token.type_name] = type_token
                 stack.extend(type_token.fields.values())
-        return MsgStrategy(rostype.type_name.replace("/", "_"),
-            (), rostype.package, rostype.message, (), True, topic, None)
 
     def _msg_generator(self, type_token, conditions):
         strategy = MessageStrategyGenerator(type_token)
