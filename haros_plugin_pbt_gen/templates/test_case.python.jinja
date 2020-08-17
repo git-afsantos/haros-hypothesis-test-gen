@@ -87,8 +87,6 @@ def _setup_sut(self):
         {% endif %}
     self.launches.append(launch)
     {% endfor %}
-    self._wait_for_nodes()
-    self._wait_for_interfaces()
     self.launch_time = get_time()
     self.clock = self.launch_time
     self.deadline = self.launch_time + {# defaults to 15 seconds -#}
@@ -97,6 +95,8 @@ def _setup_sut(self):
         monitor.on_launch(self.launch_time)
     for monitor in self.axioms:
         monitor.on_launch(self.launch_time)
+    self._wait_for_nodes()
+    self._wait_for_interfaces()
 {% endmacro %}
 
 
@@ -333,7 +333,7 @@ class TestTracer(unittest.TestCase):
             rospy.logdebug("Waiting for the SUT to shut down")
         now = get_time()
         end = now + timeout
-        rate = rospy.Rate(5)
+        rate = rospy.Rate(20)
         while now == 0.0 and not rospy.is_shutdown():
             rate.sleep()
             now = get_time()
@@ -354,7 +354,7 @@ class TestTracer(unittest.TestCase):
     def _wait_for_interfaces(self, timeout=10.0):
         rospy.logdebug("Waiting for publishers and subscribers")
         now = get_time()
-        rate = rospy.Rate(5)
+        rate = rospy.Rate(20)
         end = now + timeout
         for pub in self.pubs.values():
             if rospy.is_shutdown():
