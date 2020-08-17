@@ -119,6 +119,7 @@ def _test_hypothesis_properties(self, trace, hz):
     if rospy.is_shutdown():
         return
     try:
+        self._update()
         self.trace_start_time = get_time()
         for rep in range(trace.repetitions):
             for chunk in trace:
