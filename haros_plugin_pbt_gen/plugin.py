@@ -639,14 +639,22 @@ class StrategyBuilder(object):
         strategy = MessageStrategyGenerator(type_token)
         for condition in conditions:
             # FIXME Selector should accept AST nodes instead of strings
-            selector = Selector(str(condition.operand1), type_token)
+            x = condition.operand1
+            if x.is_function_call:
+                assert x.function == "len", "what function is this"
+                x = x.arguments[0]
+            selector = Selector(str(x), type_token)
             strategy.ensure_generator(selector)
         for condition in conditions:
             self._set_condition(strategy, condition, type_token)
         return strategy
 
     def _set_condition(self, strategy, condition, type_token):
-        selector = Selector(str(condition.operand1), type_token)
+        operand1 = condition.operand1
+        if operand1.is_function_call:
+            assert operand1.function == "len", "what function is this"
+            return self._set_attr_condition(strategy, condition, type_token)
+        selector = Selector(str(operand1), type_token)
         try:
             value = self._value(condition.operand2, strategy, type_token)
         except KeyError as e:
@@ -675,6 +683,41 @@ class StrategyBuilder(object):
                     strategy.set_lte(selector, value[1])
             else:
                 strategy.set_in(selector, value)
+
+    def _set_attr_condition(self, strategy, condition, type_token):
+        operand1 = condition.operand1
+        assert operand1.is_function_call and operand1.function == "len"
+        attr = operand1.function
+        selector = Selector(str(operand1.arguments[0]), type_token)
+        try:
+            value = self._value(condition.operand2, strategy, type_token)
+        except KeyError as e:
+            return
+        if condition.operator == "=":
+            strategy.set_attr_eq(selector, value, attr=attr)
+        elif condition.operator == "!=":
+            strategy.set_attr_neq(selector, value, attr=attr)
+        elif condition.operator == "<":
+            strategy.set_attr_lt(selector, value, attr=attr)
+        elif condition.operator == "<=":
+            strategy.set_attr_lte(selector, value, attr=attr)
+        elif condition.operator == ">":
+            strategy.set_attr_gt(selector, value, attr=attr)
+        elif condition.operator == ">=":
+            strategy.set_attr_gte(selector, value, attr=attr)
+        elif condition.operator == "in":
+            if condition.operand2.is_range:
+                if condition.operand2.exclude_min:
+                    strategy.set_attr_gt(selector, value[0], attr=attr)
+                else:
+                    strategy.set_attr_gte(selector, value[0], attr=attr)
+                if condition.operand2.exclude_max:
+                    strategy.set_attr_lt(selector, value[1], attr=attr)
+                else:
+                    strategy.set_attr_lte(selector, value[1], attr=attr)
+            else:
+                assert False
+                # strategy.set_in(selector, value)
 
     def _value(self, expr, strategy, type_token):
         if expr.is_accessor:

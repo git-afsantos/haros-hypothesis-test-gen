@@ -117,8 +117,9 @@ def convert_to_old_format(phi):
                             x = expr.operand1
                             y = expr.operand2
                             if not x.is_accessor:
-                                raise StrategyError(
-                                    "general LHS operands are not implemented")
+                                if not (x.is_function_call and x.function == "len"):
+                                    raise StrategyError(
+                                        "general LHS operands are not implemented")
                             if not (y.is_accessor or y.is_value):
                                 raise StrategyError(
                                     "general RHS operands are not implemented")
@@ -170,8 +171,9 @@ def convert_to_old_format(phi):
                     y = expr.operand2
                     n = False
                     if not x.is_accessor:
-                        raise StrategyError(
-                            "general LHS operands are not implemented")
+                        if not (x.is_function_call and x.function == "len"):
+                            raise StrategyError(
+                                "general LHS operands are not implemented")
                     if not (y.is_accessor or y.is_value or
                             (y.is_operator and y.operator == "-")):
                         raise StrategyError(
@@ -191,8 +193,9 @@ def convert_to_old_format(phi):
                     x = expr.operand1
                     y = expr.operand2
                     if not x.is_accessor:
-                        raise StrategyError(
-                            "general LHS operands are not implemented")
+                        if not (x.is_function_call and x.function == "len"):
+                            raise StrategyError(
+                                "general LHS operands are not implemented")
                     if not (y.is_accessor or y.is_value):
                         raise StrategyError(
                             "general RHS operands are not implemented")

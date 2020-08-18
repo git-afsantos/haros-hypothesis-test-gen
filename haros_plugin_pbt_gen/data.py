@@ -631,7 +631,7 @@ class ArrayFieldGenerator(FieldGenerator):
     __slots__ = FieldGenerator.__slots__ + ("set_length", "min_length",
         "max_length", "neq_length", "by_default", "fields")
 
-    _ATTRS = ("length",)
+    _ATTRS = ("len",)
 
     _UNK_ATTR = "unknown array attribute: '{}'"
 
@@ -676,7 +676,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def eq(self, value, attr=None):
         if attr is None:
             return FieldGenerator.eq(self, value)
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.set_length is None:
@@ -703,7 +703,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def neq(self, value, attr=None):
         if attr is None:
             return FieldGenerator.neq(self, value)
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.set_length == n:
@@ -719,7 +719,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def lt(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError("<")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if n == 0:
@@ -739,7 +739,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def lte(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError("<=")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.min_length is not None and self.min_length > n:
@@ -756,7 +756,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def gt(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError(">")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.max_length is not None and self.max_length <= n:
@@ -773,7 +773,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def gte(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError(">=")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.max_length is not None and self.max_length < n:
