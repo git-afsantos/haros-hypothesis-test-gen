@@ -139,6 +139,8 @@ def _test_hypothesis_properties(self, trace, hz):
                 {% endif %}
                 for msg, topic in chunk.messages:
                     self.pubs[topic].publish(msg)
+                if chunk.set_clock:
+                    self.clock = get_time()
         self.trace_done = True
         self._check_status()
         self._update()
