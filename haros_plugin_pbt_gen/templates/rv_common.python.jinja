@@ -91,10 +91,16 @@ e.state[{{ value }}]
 all({{ _field_clause(ref, condition.operator, condition.value, msg=msg) }} {# -#}
     {{ ns.py|join(' ') }})
 {%- else -%}
-    {% if condition.field.base_message().is_variable -%}
-        {% set ref = msg ~ '.' ~ (condition.field|string).split('.', 1)[-1] -%}
+    {% if condition.field.is_function_call -%}
+        {% set field = condition.field.arguments[0] %}
+        {% set fun = condition.field.function %}
     {%- else -%}
-        {% set ref = msg ~ '.' ~ condition.field -%}
+        {% set field = condition.field %}
+    {%- endif -%}
+    {% if field.base_message().is_variable -%}
+        {% set ref = msg ~ '.' ~ (field|string).split('.', 1)[-1] -%}
+    {%- else -%}
+        {% set ref = msg ~ '.' ~ field -%}
     {%- endif -%}
     {% if fun -%}
         {%- set ref = fun ~ '(' ~ ref ~ ')' -%}
