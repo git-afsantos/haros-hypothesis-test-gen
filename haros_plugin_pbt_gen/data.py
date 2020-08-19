@@ -394,7 +394,9 @@ class FieldGenerator(object):
         if self.strategy.is_enum:
             if value in self.strategy.values:
                 self.strategy.values.remove(value)
-            assert len(self.strategy.values) > 0
+            if len(self.strategy.values) <= 0:
+                raise ContradictionError("{} != {}".format(
+                    self.expression, value))
         self.assumptions.append(_Assumption(self._init_ref, value, "!="))
 
     def lt(self, value):
@@ -436,7 +438,9 @@ class FieldGenerator(object):
                 if assumption.operator == "!=":
                     if assumption.value in common:
                         common.remove(assumption.value)
-            assert len(common) > 0
+            if len(common) <= 0:
+                raise ContradictionError("{} in {}".format(
+                    self.expression, values))
             self.strategy = _SampledFrom(self._ready_ref, common)
         elif not self.strategy.is_constant:
             new_values = list(values)
@@ -444,7 +448,9 @@ class FieldGenerator(object):
                 if assumption.operator == "!=":
                     if assumption.value in new_values:
                         new_values.remove(assumption.value)
-            assert len(new_values) > 0
+            if len(new_values) <= 0:
+                raise ContradictionError("{} in {}".format(
+                    self.expression, values))
             self.strategy = _SampledFrom(self._ready_ref, new_values)
 
     def not_in(self, values):
