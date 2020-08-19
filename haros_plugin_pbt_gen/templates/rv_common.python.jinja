@@ -23,6 +23,7 @@ e.state[{{ value }}]
 {{ ref }} == {{ _rhs_value(value, msg=msg) }}
 {%- elif op == 'in' -%}
     {% if value.is_range -%}
+        ({# -#}
         {% if value.exclude_min -%}
             {{ ref }} > {{ _rhs_value(value.min_value, msg=msg) }}
         {%- else -%}
@@ -34,14 +35,16 @@ e.state[{{ value }}]
         {%- else -%}
             {{ ref }} <= {{ _rhs_value(value.max_value, msg=msg) }}
         {%- endif %}
+        {#- #})
     {%- else -%}
         {% set disjoin = joiner(' or ') %}
-        {% for item in value.values %}{# -#}
+        ({% for item in value.values %}{# -#}
             {{ disjoin() }}{{ ref }} == {{ _rhs_value(item, msg=msg) }}{# -#}
-        {% endfor %}
+        {% endfor %})
     {%- endif %}
 {%- elif op == 'not in' -%}
     {% if value.is_range -%}
+        ({# -#}
         {% if value.exclude_min -%}
             {{ ref }} <= {{ _rhs_value(value.min_value, msg=msg) }}
         {%- else -%}
@@ -53,11 +56,12 @@ e.state[{{ value }}]
         {%- else -%}
             {{ ref }} > {{ _rhs_value(value.max_value, msg=msg) }}
         {%- endif %}
+        {#- #})
     {%- else -%}
         {% set disjoin = joiner(' and ') %}
-        {% for item in value.values %}{# -#}
+        ({% for item in value.values %}{# -#}
             {{ disjoin() }}{{ ref }} != {{ _rhs_value(item, msg=msg) }}{# -#}
-        {% endfor %}
+        {% endfor %})
     {%- endif %}
 {%- else -%}
 {{ ref }} {{ op }} {{ _rhs_value(value, msg=msg) }}
