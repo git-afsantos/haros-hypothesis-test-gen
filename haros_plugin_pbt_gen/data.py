@@ -1038,6 +1038,7 @@ class _Statement(object):
         if loops:
             if statement.is_assignment:
                 statement.field = statement.field.replace("#", "i")
+                statement.expression = statement.expression.replace("#", "i")
             elif statement.is_assumption:
                 for condition in statement.conditions:
                     condition.field = condition.field.replace("#", "i")
