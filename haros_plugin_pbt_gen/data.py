@@ -1479,7 +1479,12 @@ class _LiteralWrapper(_ValueWrapper):
         return hash(self.value)
 
     def __str__(self):
-        return repr(self.value)
+        s = str(self.value)
+        if isinstance(self.value, basestring):
+            if s.startswith(('"', "'")):
+                return s
+            return '"{}"'.format(s)
+        return s
 
 
 ################################################################################
