@@ -37,6 +37,7 @@ from jinja2 import Environment, PackageLoader
 from .events import MonitorTemplate
 from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
+    ContradictionError
 )
 from .selectors import Selector
 from .util import StrategyError, convert_to_old_format
@@ -593,6 +594,13 @@ class StrategyBuilder(object):
         self.default_strategies = default_strategies
         self.pkg_imports = pkg_imports
 
+    def _try_build(self, topic, rostype, phi, fun_name):
+        try:
+            self.strategies[topic] = self._build(
+                    rostype, phi, topic=topic, fun_name=fun_name)
+        except ContradictionError as e:
+            pass # TODO log
+
     def _build(self, rostype, phi, topic=None, alias=None, fun_name="cms"):
         assert phi.is_predicate
         if phi.is_vacuous:
@@ -878,8 +886,7 @@ class Stage1Builder(StrategyBuilder):
                 else:
                     # cannot match activator
                     phi = phi.negate().join(assumed)
-                    self.strategies[topic] = self._build(
-                        rostype, phi, topic=topic, fun_name="s1cs")
+                    self._try_build(topic, rostype, phi, "s1cs")
             else: # random topic
                 if assumed.is_vacuous and not assumed.is_true:
                     continue # no random messages
@@ -946,16 +953,14 @@ class Stage2Builder(StrategyBuilder):
                         else:
                             phi = phi.join(psi.negate())
                     phi = phi.join(assumed)
-                    self.strategies[topic] = self._build(
-                        rostype, phi, topic=topic, fun_name="s2cs")
+                    self._try_build(topic, rostype, phi, "s2cs")
             elif terminator and topic == terminator.topic:
                 phi = terminator.predicate
                 if phi.is_vacuous:
                     continue # no random messages
                 else: # cannot match terminator
                     phi = phi.negate().join(assumed)
-                    self.strategies[topic] = self._build(
-                        rostype, phi, topic=topic, fun_name="s2cs")
+                    self._try_build(topic, rostype, phi, "s2cs")
             else: # random topic
                 if assumed.is_vacuous and not assumed.is_true:
                     continue # no random messages
@@ -993,16 +998,14 @@ class Stage3Builder(StrategyBuilder):
                         else:
                             phi = phi.join(psi.negate())
                     phi = phi.join(assumed)
-                    self.strategies[topic] = self._build(
-                        rostype, phi, topic=topic, fun_name="s3cs")
+                    self._try_build(topic, rostype, phi, "s3cs")
             elif terminator and topic == terminator.topic:
                 phi = terminator.predicate
                 if phi.is_vacuous:
                     continue # no random messages
                 else: # cannot match terminator
                     phi = phi.negate().join(assumed)
-                    self.strategies[topic] = self._build(
-                        rostype, phi, topic=topic, fun_name="s3cs")
+                    self._try_build(topic, rostype, phi, "s3cs")
             else: # random topic
                 if assumed.is_vacuous and not assumed.is_true:
                     continue # no random messages
