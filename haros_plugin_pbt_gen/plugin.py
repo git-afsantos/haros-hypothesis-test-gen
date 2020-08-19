@@ -636,12 +636,15 @@ class StrategyBuilder(object):
                     continue
                 if type_token.is_time or type_token.is_duration:
                     continue
-                if (type_token.is_array
-                        or type_token.type_name in self.default_strategies):
+                if type_token.type_name in self.default_strategies:
                     continue
-                self.pkg_imports.add(type_token.package)
-                self.default_strategies[type_token.type_name] = type_token
-                stack.extend(type_token.fields.values())
+                if type_token.is_array:
+                    stack.append(type_token.type_token)
+                else:
+                    assert type_token.is_message
+                    self.pkg_imports.add(type_token.package)
+                    self.default_strategies[type_token.type_name] = type_token
+                    stack.extend(type_token.fields.values())
 
     def _msg_generator(self, type_token, conditions):
         strategy = MessageStrategyGenerator(type_token)
