@@ -229,7 +229,7 @@ class RandomSample(Expression):
 
     def __str__(self):
         if self.values:
-            values = "({},)".format(", ".join(v for v in self.values))
+            values = "({},)".format(", ".join(str(v) for v in self.values))
             return "draw(strategies.sampled_from({}))".format(values)
         return "draw(strategies.sampled_from(()))"
 
