@@ -135,6 +135,8 @@ def _test_hypothesis_properties(self, trace, hz):
                 self._update()
                 {% if is_liveness %}
                 if self.main_monitor.at_least_once:
+                    passed = True
+                    print "[Example #{}]: OK".format(self.n_examples)
                     return
                 {% endif %}
                 for msg, topic in chunk.messages:
