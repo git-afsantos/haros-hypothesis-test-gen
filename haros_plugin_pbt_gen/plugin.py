@@ -255,7 +255,6 @@ class TestGenerator(object):
             uid = "P" + str(i + 1)
             monitor = MonitorTemplate(
                 uid, p, self.pubbed_topics, self.subbed_topics)
-            self._apply_slack(monitor)
             monitor.variable_substitution()
             if monitor.is_input_only:
                 axioms.append(monitor)
@@ -263,6 +262,7 @@ class TestGenerator(object):
                 monitor.python_eval = self._render_template(
                     "eval.python.jinja", data, strip=True)
             else:
+                self._apply_slack(monitor)
                 monitors.append(monitor)
             data = {
                 "monitor": monitor,
