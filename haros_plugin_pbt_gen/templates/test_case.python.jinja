@@ -413,8 +413,9 @@ class TestTracer(unittest.TestCase):
             note("No messages were sent or received.")
         else:
             p_topic = p_msg = None
+            t0 = self.msg_log[0][2]
             for topic, msg, time, sent in self.msg_log:
-                age = time - self.launch_time
+                age = time - t0
                 if age == 0:
                     age = "@ 0s"
                 elif age > 0:
