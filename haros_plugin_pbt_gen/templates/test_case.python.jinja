@@ -412,7 +412,7 @@ class TestTracer(unittest.TestCase):
         else:
             p_topic = p_msg = None
             for topic, msg, time, sent in self.msg_log:
-                age = time - self.trace_start_time
+                age = time - self.launch_time
                 if age == 0:
                     age = "@ 0s"
                 elif age > 0:
