@@ -118,7 +118,7 @@ Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
 MsgStrategy = namedtuple("MsgStrategy",
     ("name", "args", "pkg", "msg", "statements", "is_default",
-     "topic", "alias", "min_wait"))
+     "topic", "alias"))
 
 
 class SpecError(Exception):
@@ -661,7 +661,7 @@ class StrategyBuilder(object):
         name = "{}{}_{}_{}".format(
             fun_name, self.counter, rostype.package, rostype.message)
         return MsgStrategy(name, strategy.args, rostype.package,
-            rostype.message, strategy.build(), False, topic, alias, 0.0)
+            rostype.message, strategy.build(), False, topic, alias)
 
     def _default_strategy(self, rostype, topic=None):
         self._add_default_strategy_for_type(rostype)
