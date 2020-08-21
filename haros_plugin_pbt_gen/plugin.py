@@ -118,7 +118,7 @@ Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
 MsgStrategy = namedtuple("MsgStrategy",
     ("name", "args", "pkg", "msg", "statements", "is_default",
-     "topic", "alias"))
+     "topic", "alias", "min_wait"))
 
 
 class SpecError(Exception):
@@ -139,8 +139,9 @@ class TestGenerator(object):
         self.pubbed_topics = self._get_all_pubbed_topics()
         assumptions = self._get_assumptions()
         data_axioms = self._get_data_axioms()
+        time_axioms = self._get_time_axioms()
         self.strategies = StrategyManager(self.subbed_topics, assumptions,
-            data_axioms, deadline=settings.get("deadline"))
+            data_axioms, time_axioms, deadline=settings.get("deadline"))
         self.jinja_env = Environment(
             loader=PackageLoader(KEY, "templates"),
             line_statement_prefix=None,
@@ -462,6 +463,32 @@ class TestGenerator(object):
                 axioms.append(p)
         return axioms
 
+    def _get_time_axioms(self):
+        axioms = []
+        for p in self.config.hpl_properties:
+            if not p.scope.is_global:
+                continue # FIXME
+            if not p.pattern.is_prevention:
+                continue
+            a = p.pattern.trigger
+            b = p.pattern.behaviour
+            if not a.topic in self.subbed_topics:
+                continue
+            if not b.topic in self.subbed_topics:
+                continue
+            if a.topic != b.topic:
+                continue
+            if not a.predicate.is_vacuous or not a.predicate.is_true:
+                continue
+            if not b.predicate.is_vacuous or not b.predicate.is_true:
+                continue
+            if not p.is_fully_typed():
+                self.iface.log_warning(
+                    "Skipping untyped assumption:\n{}".format(p))
+                continue
+            axioms.append(p)
+        return axioms
+
 
 ################################################################################
 # Strategy Building
@@ -469,7 +496,7 @@ class TestGenerator(object):
 
 
 StrategyP = namedtuple("P", ("strategy", "spam"))
-StrategyQ = namedtuple("Q", ("strategy", "spam"))
+StrategyQ = namedtuple("Q", ("strategy", "spam", "min_time"))
 StrategyA = namedtuple("A", ("strategy", "spam", "min_num", "max_num"))
 StrategyB = namedtuple("B", ("spam", "timeout"))
 
@@ -485,15 +512,18 @@ Strategies = namedtuple("Strategies", ("p", "q", "a", "b"))
 # only 'requires', 'causes' and 'forbids' have stage 2
 
 class StrategyManager(object):
-    __slots__ = ("stage1", "stage2", "stage3", "terminator", "deadline")
+    __slots__ = ("stage1", "stage2", "stage3", "terminator", "deadline", "min_times")
 
-    def __init__(self, pubs, assumptions, data_axioms, deadline=10.0):
+    def __init__(self, pubs, assumptions, data_axioms, time_axioms, deadline=10.0):
         # pubs: topic -> ROS type token
         # assumptions: [HplAssumption]
         # data_axioms: [HplProperty]
+        # time_axioms: [HplProperty]
         default_strategies = {}
         pkg_imports = {"std_msgs"}
         types_by_msg = {}
+        self.min_times = {p.pattern.trigger.topic: p.pattern.max_time
+                     for p in time_axioms}
         # topic -> (type token, predicate)
         topics = self._mapping_hpl_assumptions(pubs, assumptions)
         self._mapping_hpl_axioms(topics, pubs, data_axioms)
@@ -542,6 +572,7 @@ class StrategyManager(object):
             assert self.stage2.trigger is None
             if prop.pattern.max_time < INF:
                 b_timeout = prop.pattern.max_time
+        min_time = 0.0
         if prop.scope.activator is None:
             assert self.stage1.activator is None
         else:
@@ -550,10 +581,18 @@ class StrategyManager(object):
             assert self.terminator.terminator is None
         else:
             assert self.terminator.terminator is not None
+            if prop.scope.activator is not None:
+                t1 = prop.scope.activator.topic
+                t2 = prop.scope.terminator.topic
+                if t1 == t2:
+                    min_time = self.min_times.get(t1, 0.0)
+        if not min_time < INF:
+            raise StrategyError(("impossible to generate traces due to "
+                "timing contraints: {}").format(prop))
         p = StrategyP(self.stage1.activator,
             list(self.stage1.strategies.values()))
         q = StrategyQ(self.terminator.terminator,
-            list(self.stage3.strategies.values()))
+            list(self.stage3.strategies.values()), min_time)
         a = StrategyA(self.stage2.trigger,
             list(self.stage2.strategies.values()), a_min, a_max)
         b = StrategyB(list(self.stage3.strategies.values()), b_timeout)
@@ -622,7 +661,7 @@ class StrategyBuilder(object):
         name = "{}{}_{}_{}".format(
             fun_name, self.counter, rostype.package, rostype.message)
         return MsgStrategy(name, strategy.args, rostype.package,
-            rostype.message, strategy.build(), False, topic, alias)
+            rostype.message, strategy.build(), False, topic, alias, 0.0)
 
     def _default_strategy(self, rostype, topic=None):
         self._add_default_strategy_for_type(rostype)

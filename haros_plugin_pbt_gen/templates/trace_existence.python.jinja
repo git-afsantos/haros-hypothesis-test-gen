@@ -13,7 +13,11 @@ def traces(draw):
 {{ trace.gen_spam_chunks(b.spam)|indent(width=4, first=true) }}
 {% if q.strategy %}{# after-until or until #}
 {% set ends_via_timeout = 'False' %}
-{{ trace.gen_terminator(q, 0.0, 2 * b.timeout)|indent(width=4, first=true) }}
+{% if 2 * b.timeout > q.min_time %}
+{{ trace.gen_terminator(q, q.min_time, 2 * b.timeout)|indent(width=4, first=true) }}
+{% else %}
+{{ trace.gen_terminator(q, q.min_time, 2 * q.min_time)|indent(width=4, first=true) }}
+{% endif %}
 {% else %}
 {% set ends_via_timeout = 'True' %}
     # Property scope is terminated at shutdown.
