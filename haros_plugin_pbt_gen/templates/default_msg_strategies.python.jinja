@@ -52,6 +52,68 @@ def {{ strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
 
 {% include "base_strategies.py" ignore missing %}
 
+{% if random_headers %}
+@strategies.composite
+def ros_std_msgs_Header(draw, msg=None):
+    msg = msg or std_msgs.Header()
+    msg.stamp = draw(ros_time())
+    msg.frame_id = draw(ros_string())
+    assume(msg.stamp.secs <= 4294967295)
+    assume(msg.stamp.nsecs <= 4294967295)
+    return msg
+
+std_msgs_Header = ros_std_msgs_Header
+{% else %}
+import genpy
+
+class AutoTime(genpy.Time):
+    __slots__ = ("_secs", "_nsecs", "_set")
+
+    def __init__(self, secs=0, nsecs=0):
+        self._secs = secs
+        self._nsecs = nsecs
+        self._set = False
+        super(AutoTime, self).__init__(secs, nsecs)
+
+    @property
+    def secs(self):
+        if not self._set:
+            stamp = rospy.get_rostime()
+            self._secs = stamp.secs
+            self._nsecs = stamp.nsecs
+            self._set = True
+        return self._secs
+
+    @secs.setter
+    def secs(self, t):
+        self._secs = t
+        self._set = False
+
+    @property
+    def nsecs(self):
+        if not self._set:
+            stamp = rospy.get_rostime()
+            self._secs = stamp.secs
+            self._nsecs = stamp.nsecs
+            self._set = True
+        return self._nsecs
+
+    @nsecs.setter
+    def nsecs(self, t):
+        self._nsecs = t
+        self._set = False
+
+
+@strategies.composite
+def ros_std_msgs_Header(draw, msg=None):
+    msg = msg or std_msgs.Header()
+    msg.stamp = AutoTime()
+    msg.frame_id = draw(ros_string())
+    return msg
+
+std_msgs_Header = ros_std_msgs_Header
+{% endif %}
+
 {% for type_token in type_tokens %}
 
 {{ default_msg(type_token) }}

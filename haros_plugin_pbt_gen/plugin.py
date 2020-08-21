@@ -279,10 +279,13 @@ class TestGenerator(object):
             p = monitors[i].hpl_property
             try:
                 strategies = self.strategies.build_strategies(p)
+                data = {
+                    "type_tokens": self.strategies.default_strategies.values(),
+                    "random_headers": self.settings.get("random_headers", True),
+                }
                 py_default_msgs = self._render_template(
                     "default_msg_strategies.python.jinja",
-                    {"type_tokens": self.strategies.default_strategies.values()},
-                    strip=True)
+                    data, strip=True)
                 py_custom_msgs = self._render_template(
                     "custom_msg_strategies.python.jinja",
                     strategies._asdict(), strip=True)
