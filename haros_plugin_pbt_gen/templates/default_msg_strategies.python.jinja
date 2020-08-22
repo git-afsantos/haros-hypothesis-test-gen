@@ -72,8 +72,9 @@ class AutoTime(genpy.Time):
     def __init__(self, secs=0, nsecs=0):
         self._secs = secs
         self._nsecs = nsecs
-        self._set = False
+        self._set = True
         super(AutoTime, self).__init__(secs, nsecs)
+        self._set = False
 
     @property
     def secs(self):
