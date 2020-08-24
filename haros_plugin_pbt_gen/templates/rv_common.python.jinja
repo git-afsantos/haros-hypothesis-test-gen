@@ -6,14 +6,14 @@
 {% if not value.is_value and value.is_accessor -%}
 {{ msg }}.{{ value }}
 {%- elif value.is_value -%}
-    {% if value.is_literal -%}
-{{ value.value }}
-    {%- elif value.is_variable -%}
+    {% if value.is_variable -%}
         {% if value.external -%}
 entry.state[{{ value }}]
         {%- else -%}
 e.state[{{ value }}]
         {%- endif %}
+    {%- else -%}
+{{ value.value }}
     {%- endif %}
 {%- endif %}
 {% endmacro %}
