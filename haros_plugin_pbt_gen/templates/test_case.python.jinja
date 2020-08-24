@@ -306,6 +306,13 @@ class TestTracer(unittest.TestCase):
         with HiddenPrints():
             for launch in self.launches:
                 launch.shutdown()
+            try:
+                kill_nodes(self.NODES)
+            except ROSNodeException as e:
+                if e.message.startswith("Unknown node"):
+                    pass
+                else:
+                    raise e
         for sub in self.subs.values():
             sub.reset()
         self._wait_for_nodes(online=False)
@@ -338,11 +345,11 @@ class TestTracer(unittest.TestCase):
         else:
             rospy.logdebug("Waiting for the SUT to shut down")
         now = get_time()
-        end = now + timeout
         rate = rospy.Rate(20)
         while now == 0.0 and not rospy.is_shutdown():
             rate.sleep()
             now = get_time()
+        end = now + timeout
         pending = list(self.NODES)
         with HiddenPrints():
             while now < end and pending and not rospy.is_shutdown():
@@ -351,11 +358,19 @@ class TestTracer(unittest.TestCase):
                     pending.append(node_name)
                     rate.sleep()
                 now = get_time()
-        if pending and not rospy.is_shutdown():
-            if online:
-                raise LookupError("Failed to find nodes " + str(pending))
-            else:
-                raise LookupError("Failed to kill nodes " + str(pending))
+        if not rospy.is_shutdown():
+            if pending:
+                if online:
+                    raise LookupError("Failed to find nodes " + str(pending))
+                else:
+                    raise LookupError("Failed to kill nodes " + str(pending))
+            pending = [n for n in get_node_names() if n in self.NODES]
+            if not online: # exclude self
+                while now < end and len(pending) > 1 and not rospy.is_shutdown():
+                    rate.sleep()
+                    now = get_time()
+                if len(pending) > 1:
+                    raise LookupError("Failed to kill nodes " + str(pending))
 
     def _wait_for_interfaces(self, timeout=10.0):
         rospy.logdebug("Waiting for publishers and subscribers")

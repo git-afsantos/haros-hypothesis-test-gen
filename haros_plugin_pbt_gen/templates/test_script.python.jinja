@@ -99,7 +99,7 @@ from hypothesis.errors import UnsatisfiedAssumption
 import hypothesis.strategies as strategies
 import rospy
 import roslaunch
-from rosnode import rosnode_ping
+from rosnode import get_node_names, rosnode_ping, kill_nodes, ROSNodeException
 from rospy import Publisher, Subscriber, SubscribeListener
 
 {% for pkg_name in pkg_imports %}
