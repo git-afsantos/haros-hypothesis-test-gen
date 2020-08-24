@@ -306,6 +306,7 @@ class TestTracer(unittest.TestCase):
         with HiddenPrints():
             for launch in self.launches:
                 launch.shutdown()
+            _rosnode_cmd_kill(["--all"])
         for sub in self.subs.values():
             sub.reset()
         self._wait_for_nodes(online=False)
