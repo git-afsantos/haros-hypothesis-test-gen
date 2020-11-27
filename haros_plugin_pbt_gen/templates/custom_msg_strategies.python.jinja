@@ -1,0 +1,93 @@
+{##############################################################################
+ # Message Strategy Macros
+ ##############################################################################}
+
+{# Writes a statement for a custom message strategy.
+    Statements can be simple assignments or assumptions, or they could be
+    loops or statement blocks, in which case this macro becomes recursive. #}
+{% macro _statement(statement) %}
+{% if statement.is_assignment -%}
+{{ statement.field }} = {{ statement.expression }}
+{%- elif statement.is_assumption -%}
+assume({{ statement.expression }})
+{%- elif statement.is_block -%}
+{% for child in statement.statements %}
+{{ _statement(child) }}
+{% endfor %}
+{%- elif statement.is_loop -%}
+for {{ statement.variable }} in {{ statement.expression }}:
+{{ _statement(statement.statement)|indent(width=4, first=True) }}
+{%- endif %}
+{% endmacro %}
+
+
+{# Builds a custom message strategy for a given package and message,
+    from a given list of statements. The statements determine which values
+    to assign to each field, as well as any additional constraints that
+    must be satisfied. #}
+{% macro custom_msg(strategy) %}
+@strategies.composite
+{% if strategy.args %}
+def {{ strategy.name }}(draw, {{ strategy.args|join(', ') }}):
+{% else %}
+def {{ strategy.name }}(draw):
+{% endif %}
+    msg = {{ strategy.pkg }}.{{ strategy.msg }}()
+{% for statement in strategy.statements %}
+{{ _statement(statement)|indent(width=4, first=True) }}
+{% endfor %}
+    return msg
+{% endmacro %}
+
+
+{##############################################################################
+ # Template Body
+ ##############################################################################}
+
+{# Strategies = (p, q, a, b) #}
+{# p = (strategy, spam) #}
+{# q = (strategy, spam) #}
+{# a = (strategy, spam, min_num, max_num) #}
+{# b = (spam, timeout) #}
+{# MsgStrategy = ("name", "args", "pkg", "msg", "statements",
+                  "is_default", "topic", "alias") #}
+
+{# assume: q.spam and b.spam are the same #}
+
+
+{% if p.strategy %}
+    {% for strategy in p.spam %}
+        {% if not strategy.is_default %}
+{{ custom_msg(strategy) }}
+        {% endif %}
+    {% endfor %}
+    {% if not p.strategy.is_default %}
+
+{{ custom_msg(p.strategy) }}
+    {% endif %}
+{% endif %}
+
+{% if q.strategy %}
+    {% if not q.strategy.is_default %}
+
+{{ custom_msg(q.strategy) }}
+    {% endif %}
+{% endif %}
+
+{% for strategy in b.spam %}
+    {% if not strategy.is_default %}
+{{ custom_msg(strategy) }}
+    {% endif %}
+{% endfor %}
+
+{% if a.strategy %}
+    {% for strategy in a.spam %}
+        {% if not strategy.is_default %}
+{{ custom_msg(strategy) }}
+        {% endif %}
+    {% endfor %}
+    {% if not a.strategy.is_default %}
+
+{{ custom_msg(a.strategy) }}
+    {% endif %}
+{% endif %}

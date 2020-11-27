@@ -1,0 +1,120 @@
+{###############################################################################
+    EventListener Macros
+###############################################################################}
+
+{% macro _rhs_value(value, msg='msg') %}
+{% if not value.is_value and value.is_accessor -%}
+{{ msg }}.{{ value }}
+{%- elif value.is_value -%}
+    {% if value.is_variable -%}
+        {% if value.external -%}
+entry.state[{{ value }}]
+        {%- else -%}
+e.state[{{ value }}]
+        {%- endif %}
+    {%- else -%}
+{{ value.value }}
+    {%- endif %}
+{%- endif %}
+{% endmacro %}
+
+{% macro _field_clause(ref, op, value, msg='msg') %}
+{% if op == '=' -%}
+{{ ref }} == {{ _rhs_value(value, msg=msg) }}
+{%- elif op == 'in' -%}
+    {% if value.is_range -%}
+        ({# -#}
+        {% if value.exclude_min -%}
+            {{ ref }} > {{ _rhs_value(value.min_value, msg=msg) }}
+        {%- else -%}
+            {{ ref }} >= {{ _rhs_value(value.min_value, msg=msg) }}
+        {%- endif %}{# -#}
+        {{ ' and ' }}{# -#}
+        {% if value.exclude_max -%}
+            {{ ref }} < {{ _rhs_value(value.max_value, msg=msg) }}
+        {%- else -%}
+            {{ ref }} <= {{ _rhs_value(value.max_value, msg=msg) }}
+        {%- endif %}
+        {#- #})
+    {%- else -%}
+        {% set disjoin = joiner(' or ') %}
+        ({% for item in value.values %}{# -#}
+            {{ disjoin() }}{{ ref }} == {{ _rhs_value(item, msg=msg) }}{# -#}
+        {% endfor %})
+    {%- endif %}
+{%- elif op == 'not in' -%}
+    {% if value.is_range -%}
+        ({# -#}
+        {% if value.exclude_min -%}
+            {{ ref }} <= {{ _rhs_value(value.min_value, msg=msg) }}
+        {%- else -%}
+            {{ ref }} < {{ _rhs_value(value.min_value, msg=msg) }}
+        {%- endif %}{# -#}
+        {{ ' or ' }}{# -#}
+        {% if value.exclude_max -%}
+            {{ ref }} >= {{ _rhs_value(value.max_value, msg=msg) }}
+        {%- else -%}
+            {{ ref }} > {{ _rhs_value(value.max_value, msg=msg) }}
+        {%- endif %}
+        {#- #})
+    {%- else -%}
+        {% set disjoin = joiner(' and ') %}
+        ({% for item in value.values %}{# -#}
+            {{ disjoin() }}{{ ref }} != {{ _rhs_value(item, msg=msg) }}{# -#}
+        {% endfor %})
+    {%- endif %}
+{%- else -%}
+{{ ref }} {{ op }} {{ _rhs_value(value, msg=msg) }}
+{%- endif %}
+{% endmacro %}
+
+{% macro _field_parts_to_str(root, accessors) -%}
+{{ root }}{% for accessor in accessors -%}
+    {% if accessor.is_indexed -%}
+        [{{ accessor.key }}]
+    {%- else -%}
+        .{{ accessor.key }}
+    {%- endif %}
+{%- endfor %}
+{%- endmacro %}
+
+{% macro _field_condition(condition, fun=none, msg='msg') -%}
+{% if condition.field.is_multi_field -%}
+    {% set ns = namespace(py = [], root = msg) %}
+    {% set _f_loops, _rem_expr = condition.field.loops() %}
+    {% for accessors, it in _f_loops -%}
+        {% set _array = _field_parts_to_str(ns.root, accessors) %}
+        {% if '\\' in it.key %}
+            {% set _array = 'all_except(' ~ _array ~ ', ('
+                ~ it.key[2:] ~ ',))' %}
+        {% endif %}
+        {% set ns.root = 'x' ~ loop.index %}{# -#}
+        {{ ns.py.append('for x' ~ loop.index ~ ' in ' ~ _array)|d("", true) }}
+    {%- endfor %}
+    {% set ref = _field_parts_to_str(ns.root, _rem_expr) %}
+all({{ _field_clause(ref, condition.operator, condition.value, msg=msg) }} {# -#}
+    {{ ns.py|join(' ') }})
+{%- else -%}
+    {% if condition.field.is_function_call -%}
+        {% set field = condition.field.arguments[0] %}
+        {% set fun = condition.field.function %}
+    {%- else -%}
+        {% set field = condition.field %}
+    {%- endif -%}
+    {% if field.base_message().is_variable -%}
+        {% set ref = msg ~ '.' ~ (field|string).split('.', 1)[-1] -%}
+    {%- else -%}
+        {% set ref = msg ~ '.' ~ field -%}
+    {%- endif -%}
+    {% if fun -%}
+        {%- set ref = fun ~ '(' ~ ref ~ ')' -%}
+    {%- endif -%}
+    {{ _field_clause(ref, condition.operator, condition.value, msg=msg) }}
+{%- endif %}
+{%- endmacro %}
+
+
+{% macro inline_conditions(conditions, msg='msg') %}
+{% for condition in conditions %} and {{ _field_condition(condition, msg=msg) }}{# -#}
+{% endfor %}
+{% endmacro %}

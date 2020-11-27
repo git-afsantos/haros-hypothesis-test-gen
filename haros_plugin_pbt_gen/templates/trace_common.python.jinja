@@ -1,0 +1,147 @@
+{% import 'default_msg_strategies.python.jinja' as msgs %}
+
+{# Generation of Random messages. #}
+{% macro _gen_spam(spam) -%}
+# ----- Spam ------------------------------------------
+all_msgs = []
+{% for strategy in spam %}
+    {% if strategy.is_default %}
+elems = {{ msgs.strategy_name(strategy.pkg, strategy.msg) }}()
+    {% else %}
+elems = {{ strategy.name }}({{ strategy.args|join(', ') }})
+    {% endif %}
+elems = strategies.tuples(elems, strategies.just("{{ strategy.topic }}"))
+all_msgs.extend(draw(strategies.lists(elems, min_size=0, max_size=3)))
+{% endfor %}
+{%- endmacro %}
+
+
+{% macro gen_spam_chunks(spam) -%}
+{% if spam %}
+{{ _gen_spam(spam) }}
+if all_msgs:
+    r.shuffle(all_msgs)
+    chunks.extend(draw(chunk_splits(all_msgs)))
+{% else %}
+# There are no strategies for random messages.
+{% endif %}
+{%- endmacro %}
+
+
+{% macro gen_activator(p) -%}
+{% if p.spam %}
+{{ _gen_spam(p.spam) }}
+if all_msgs:
+    r.shuffle(all_msgs)
+    chunks.extend(draw(chunk_splits(all_msgs)))
+else:
+    chunks.append(Chunk())
+{% else %}
+# There are no strategies for random messages.
+chunks.append(Chunk())
+{% endif %}
+# ----- Activator -------------------------------------
+{% if p.strategy.is_default %}
+    {% set strategy = msgs.strategy_name(p.strategy.pkg, p.strategy.msg) %}
+    {% set args = '' %}
+{% else %}
+    {% set strategy = p.strategy.name %}
+    {% set args = p.strategy.args|join(', ') %}
+{% endif %}
+msg = (draw({{ strategy }}({{ args }})), "{{ p.strategy.topic }}")
+{% if p.strategy.alias %}
+msg_{{ p.strategy.alias }} = msg[0]
+{% endif %}
+chunks[-1].messages.append(msg)
+chunks[-1].set_clock = True
+{%- endmacro %}
+
+
+{% macro gen_terminator(q, min_delay, max_delay) -%}
+{{ gen_delay_chunk(min_delay, max_delay, relative_delay=true) }}
+{% if q.spam %}
+{{ _gen_spam(q.spam) }}
+if all_msgs:
+    r.shuffle(all_msgs)
+    chunk.messages.extend(all_msgs)
+{% else %}
+# There are no strategies for random messages.
+{% endif %}
+# ----- Terminator ------------------------------------
+{% if q.strategy.is_default %}
+    {% set strategy = msgs.strategy_name(q.strategy.pkg, q.strategy.msg) %}
+    {% set args = '' %}
+{% else %}
+    {% set strategy = q.strategy.name %}
+    {% set args = q.strategy.args|join(', ') %}
+{% endif %}
+msg = (draw({{ strategy }}({{ args }})), "{{ q.strategy.topic }}")
+chunk.messages.append(msg)
+{%- endmacro %}
+
+
+{% macro gen_delay_chunk(min_delay, max_delay, relative_delay=true) -%}
+chunk = Chunk()
+{% if relative_delay %}
+chunk.relative_delay = True
+{% else %}
+chunk.relative_delay = False
+{% endif %}
+{% if min_delay != max_delay %}
+chunk.delay = draw(strategies.sampled_from(({{ min_delay }}, {{ max_delay }})))
+{% else %}
+chunk.delay = {{ min_delay }}
+{% endif %}
+chunks.append(chunk)
+{%- endmacro %}
+
+
+{% macro gen_triggers(a, b) -%}
+{% if a.strategy.is_default %}
+    {% set strategy = msgs.strategy_name(a.strategy.pkg, a.strategy.msg) %}
+    {% set args = '' %}
+{% else %}
+    {% set strategy = a.strategy.name %}
+    {% set args = a.strategy.args|join(', ') %}
+{% endif %}
+# ----- Trigger ---------------------------------------
+elems = strategies.tuples({{ strategy }}({{ args }}), strategies.just("{{ a.strategy.topic }}"))
+triggers = draw(strategies.lists(elems, min_size={{ a.min_num }}, max_size={{ a.max_num }}))
+{% if a.min_num > 0 %}
+new_chunks = draw(chunk_splits(triggers))
+chunks.extend(new_chunks)
+delays = strategies.sampled_from((0.0, {{ b.timeout }}))
+for chunk in new_chunks:
+    chunk.relative_delay = True
+    chunk.delay = draw(delays)
+    chunk.set_clock = True
+    chunk.contains_trigger = True
+    {% if a.spam %}
+{{ _gen_spam(a.spam) }}
+if all_msgs:
+    r.shuffle(all_msgs)
+    i = 0
+    for msg in all_msgs:
+        new_chunks[i].messages.append(msg)
+        i = (i + 1) % len(new_chunks)
+    {% endif %}
+{% else %}{# a.min_num == 0 #}
+if triggers:
+    new_chunks = draw(chunk_splits(triggers))
+    chunks.extend(new_chunks)
+    delays = strategies.sampled_from((0.0, {{ b.timeout }}))
+    for chunk in new_chunks:
+        chunk.relative_delay = True
+        chunk.delay = draw(delays)
+        chunk.set_clock = True
+    {% if a.spam %}
+{{ _gen_spam(a.spam)|indent(width=4, first=true) }}
+    if all_msgs:
+        r.shuffle(all_msgs)
+        i = 0
+        for msg in all_msgs:
+            new_chunks[i].messages.append(msg)
+            i = (i + 1) % len(new_chunks)
+    {% endif %}
+{% endif %}
+{%- endmacro %}

@@ -1,0 +1,274 @@
+{% import 'rv_common.python.jinja' as rv %}
+
+{##############################################################################
+    Pattern Monitor Macros
+ ##############################################################################}
+
+{% macro _eval_absence(monitor) -%}
+{% if monitor.has_scope_timeout %}
+if scope_time >= {{ monitor.scope_timeout }}:
+    break # to the next scope
+{% endif %}
+{{ _chunk_contains(monitor.behaviour) }}
+if found:
+    return False
+{%- endmacro %}
+
+
+
+{% macro _eval_existence(monitor) -%}
+{% if monitor.has_scope_timeout %}
+if scope_time >= {{ monitor.scope_timeout }}:
+    return False
+{% endif %}
+{{ _chunk_contains(monitor.behaviour) }}
+if found:
+    break
+{%- endmacro %}
+
+
+
+{% macro _eval_precedence(monitor) -%}
+{% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+for msg, topic in chunk.messages:
+    if topic == "{{ b.topic }}"{{ rv.inline_conditions(b.conditions) }}:
+        safe = False
+        b_msg = msg
+{% if a.has_log_age %}
+        clock = 0.0
+{% endif %}
+        for msg, topic in chunk.messages:
+            if topic == "{{ a.topic }}"{# -#}
+                    {{ rv.inline_conditions(a.conditions) }}:
+{% if b.dep_conditions.get(a.key()) %}
+    {% if a.saved_vars %}
+                entry = scope
+        {% for key, msg_field in a.saved_vars.iteritems() %}
+                scope.state[{{ key }}] = msg.{{ msg_field }}
+        {% endfor %}
+    {% endif %}
+                if True{{ rv.inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
+                    safe = True
+                    break
+{% else %}
+                safe = True
+                break
+{% endif %}
+        if safe:
+            continue # stop searching the past
+        for j in range(i - 1, -1, -1):
+            chunk2 = scope.chunks[j]
+{% if a.has_log_age %}
+            clock += scope.chunks[j+1]._delta_time
+            if clock > {{ a.log_age }}:
+                return False
+{% endif %}
+            for msg, topic in chunk2.messages:
+                if topic == "{{ a.topic }}"{# -#}
+                        {{ rv.inline_conditions(a.conditions) }}:
+{% if b.dep_conditions.get(a.key()) %}
+    {% if a.saved_vars %}
+                    entry = scope
+        {% for key, msg_field in a.saved_vars.iteritems() %}
+                    scope.state[{{ key }}] = msg.{{ msg_field }}
+        {% endfor %}
+    {% endif %}
+                    if True{# -#}
+                    {{ rv.inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
+                        safe = True
+                        break
+{% else %}
+                    safe = True
+                    break
+{% endif %}
+            if safe:
+                break # stop searching the past
+        else:
+            return False
+{%- endmacro %}
+
+
+
+{% macro _eval_response(monitor) -%}
+{% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+for msg, topic in chunk.messages:
+    if topic == "{{ a.topic }}"{{ rv.inline_conditions(a.conditions) }}:
+{% if a.saved_vars %}
+    {% for key, msg_field in a.saved_vars.iteritems() %}
+        scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% endfor %}
+{% endif %}
+{% if b.is_under_timer %}
+        clock = -chunk._delta_time
+{% endif %}
+        for j in range(i, len(scope.chunks)):
+            chunk2 = scope.chunks[j]
+{% if b.is_under_timer %}
+            clock += chunk2._delta_time
+            if clock > {{ a.external_timer }}:
+                return False
+{% endif %}
+            for msg, topic in chunk2.messages:
+                if topic == "{{ b.topic }}"{# -#}
+                        {{ rv.inline_conditions(b.conditions) }}:
+                    break
+        else:
+            return False
+{%- endmacro %}
+
+
+
+{% macro _eval_prevention(monitor) -%}
+{% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
+{% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
+for msg, topic in chunk.messages:
+    if topic == "{{ a.topic }}"{{ rv.inline_conditions(a.conditions) }}:
+{% if a.saved_vars %}
+    {% for key, msg_field in a.saved_vars.iteritems() %}
+        scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% endfor %}
+{% endif %}
+{% if b.is_under_timer %}
+        clock = 0.0
+{% endif %}
+        for j in range(i + 1, len(scope.chunks)):
+            chunk2 = scope.chunks[j]
+{% if b.is_under_timer %}
+            clock += chunk2._delta_time
+            if clock > {{ a.external_timer }}:
+                break
+{% endif %}
+            for msg, topic in chunk2.messages:
+                if topic == "{{ b.topic }}"{# -#}
+                        {{ rv.inline_conditions(b.conditions) }}:
+                    return False
+{%- endmacro %}
+
+
+{##############################################################################
+    Property Monitor Macros
+ ##############################################################################}
+
+{% macro _initial_state(monitor) -%}
+{% if monitor.saved_vars -%}
+[None] * {{ monitor.saved_vars }}
+{%- else -%}
+()
+{%- endif %}
+{%- endmacro %}
+
+
+{% macro _chunk_contains(event) -%}
+{% set event = event.events[0] %}{# FIXME: this is a hammer -#}
+found = False
+for msg, topic in chunk.messages:
+    if topic == "{{ event.topic }}"{{ rv.inline_conditions(event.conditions) }}:
+        found = True
+{% if event.saved_vars %}
+    {% for key, msg_field in event.saved_vars.iteritems() %}
+        scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% endfor %}
+{% endif %}
+        break
+{%- endmacro %}
+
+
+{% macro _eval_scope(monitor, first=true) -%}
+{% if first %}
+scope_clock = 0.0 if not scope.chunks else -scope.chunks[0]._delta_time
+{% else %}
+scope_clock = 0.0
+{% endif %}
+for i in range(len(scope.chunks)):
+    chunk = scope.chunks[i]
+    scope_clock += chunk._delta_time
+{% if monitor.is_absence %}
+{{ _eval_absence(monitor)|indent(width=4, first=true) }}
+{% elif monitor.is_existence %}
+{{ _eval_existence(monitor)|indent(width=4, first=true) }}
+else:
+    return False
+{% elif monitor.is_precedence %}
+{{ _eval_precedence(monitor)|indent(width=4, first=true) }}
+{% elif monitor.is_response %}
+{{ _eval_response(monitor)|indent(width=4, first=true) }}
+{% elif monitor.is_prevention %}
+{{ _eval_prevention(monitor)|indent(width=4, first=true) }}
+{% else %}
+    pass
+{% endif %}
+{%- endmacro %}
+
+
+{% macro _globally(monitor) -%}
+e = scope = EvalScope(trace.chunks, {{ _initial_state(monitor) }})
+{{ _eval_scope(monitor, first=false) }}
+{%- endmacro %}
+
+{% macro _after_p(monitor) -%}
+e = scope = EvalScope([], {{ _initial_state(monitor) }})
+for i in range(len(trace.chunks)):
+    chunk = trace.chunks[i]
+{{ _chunk_contains(monitor.activator)|indent(width=4, first=true) }}
+    if found:
+        scope.chunks.extend(trace.chunks[i:])
+        break
+{{ _eval_scope(monitor, first=true) }}
+{%- endmacro %}
+
+{% macro _until_q(monitor) -%}
+e = scope = EvalScope(trace.chunks, {{ _initial_state(monitor) }})
+for i in range(len(trace.chunks)):
+    chunk = trace.chunks[i]
+{{ _chunk_contains(monitor.terminator)|indent(width=4, first=true) }}
+    if found:
+        scope = trace.chunks[:i]
+        break
+{{ _eval_scope(monitor, first=false) }}
+{%- endmacro %}
+
+{% macro _after_p_until_q(monitor) -%}
+scopes = []
+j = -1
+scope = EvalScope([], {{ _initial_state(monitor) }})
+for i in range(len(trace.chunks)):
+{{ _chunk_contains(monitor.activator)|indent(width=4, first=true) }}
+    if j < 0 and found:
+        j = i
+{{ _chunk_contains(monitor.terminator)|indent(width=4, first=true) }}
+    if j >= 0 and found:
+        scope.chunks.extend(trace.chunks[j:i])
+        scopes.append(scope)
+        scope = EvalScope([], {{ _initial_state(monitor) }})
+        j = -1
+if j >= 0:
+    scope.chunks.extend(trace.chunks[j:])
+    scopes.append(scope)
+for scope in scopes:
+    e = scope
+{{ _eval_scope(monitor, first=true)|indent(width=4, first=true) }}
+{%- endmacro %}
+
+
+{##############################################################################
+    Template Body
+ ##############################################################################}
+
+def eval_{{ monitor.class_name }}(trace):
+    # {{ monitor.hpl_string }}
+{% if monitor.activator is none %}
+    {% if monitor.terminator is none %}
+{{ _globally(monitor)|indent(width=4, first=true) }}
+    {% else %}
+{{ _until_q(monitor)|indent(width=4, first=true) }}
+    {% endif %}
+{% else %}
+    {% if monitor.terminator is none %}
+{{ _after_p(monitor)|indent(width=4, first=true) }}
+    {% else %}
+{{ _after_p_until_q(monitor)|indent(width=4, first=true) }}
+    {% endif %}
+{% endif %}
+    return True

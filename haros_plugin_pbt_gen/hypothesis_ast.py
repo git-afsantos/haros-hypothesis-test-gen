@@ -25,6 +25,8 @@
 # Statement Classes
 ################################################################################
 
+from builtins import str
+from builtins import object
 class Statement(object):
     __slots__ = ()
 
@@ -172,6 +174,9 @@ class StatementBlock(Statement):
 class Expression(object):
     __slots__ = ()
 
+    def replace(self, old_str, new_str):
+        return self
+
     def __str__(self):
         assert False, "must implement this"
 
@@ -199,6 +204,12 @@ class RandomValue(Expression):
         self.type_name = type_name
         self.args = kwargs
 
+    def replace(self, old_str, new_str):
+        self.args = {key: value.replace(old_str, new_str)
+                     for key, value in self.args.items()
+                     if value is not None}
+        return self
+
     def __str__(self):
         args = ", ".join("{}={}".format(key, str(value))
                          for key, value in self.args.items()
@@ -214,9 +225,13 @@ class RandomSample(Expression):
         # values :: [string]
         self.values = values
 
+    def replace(self, old_str, new_str):
+        self.values = [v.replace(old_str, new_str) for v in self.values]
+        return self
+
     def __str__(self):
         if self.values:
-            values = "({},)".format(", ".join(v for v in self.values))
+            values = "({},)".format(", ".join(str(v) for v in self.values))
             return "draw(strategies.sampled_from({}))".format(values)
         return "draw(strategies.sampled_from(()))"
 
@@ -242,6 +257,11 @@ class FieldCondition(Expression):
         self.operator = operator
         self.expression = expression
 
+    def replace(self, old_str, new_str):
+        self.field = self.field.replace(old_str, new_str)
+        self.expression = self.expression.replace(old_str, new_str)
+        return self
+
     def __str__(self):
         return "{} {} {}".format(
             self.field, self.operator, str(self.expression))
@@ -253,6 +273,10 @@ class Disjunction(Expression):
     def __init__(self, conditions):
         # conditions :: [string|Expression]
         self.conditions = conditions
+
+    def replace(self, old_str, new_str):
+        self.conditions = [c.replace(old_str, new_str) for c in self.conditions]
+        return self
 
     def __str__(self):
         return "({})".format(" or ".join(str(c) for c in self.conditions))

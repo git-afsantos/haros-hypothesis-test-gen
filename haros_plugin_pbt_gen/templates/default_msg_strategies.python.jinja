@@ -1,0 +1,121 @@
+{##############################################################################
+ # Message Strategy Macros
+ ##############################################################################}
+
+{# Converts a message type (e.g. 'std_msgs/String') into a strategy name. #}
+{% macro _type_to_strategy(name) -%}
+ros_{{ name|replace('/', '_') }}
+{%- endmacro %}
+
+{# Converts a package and message names into a strategy name. #}
+{% macro strategy_name(pkg, msg) -%}
+ros_{{ pkg }}_{{ msg }}
+{%- endmacro %}
+
+{# Simple message field initialisation. Draws and assigns a value if the
+    field is of a primitive type, otherwise initialises the field in-place,
+    since building a ROS message already initialises all field trees below. #}
+{% macro _init_simple_field(name, type_token) %}
+{% if type_token.is_primitive or type_token.is_time or type_token.is_duration %}
+msg.{{ name }} = draw({{ _type_to_strategy(type_token.type_name) }}()){# -#}
+{% else %}{# modify in-place, ignore return value #}
+draw({{ _type_to_strategy(type_token.type_name) }}(msg=msg.{{ name }})){# -#}
+{% endif %}
+{% endmacro %}
+
+{# Builds a default message strategy for a given message type token.
+    Default strategies draw all values at random, without constraints. #}
+{% macro default_msg(ros_type) %}
+@strategies.composite
+def {{ strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
+    msg = msg or {{ ros_type.package }}.{{ ros_type.message }}()
+    {% for field, type_token in ros_type.fields.items() %}
+    {% if type_token.is_array %}
+        {% if type_token.length is none %}
+    msg.{{ field }} = draw(strategies.lists({# -#}
+        {{ _type_to_strategy(type_token.type_name) }}()))
+        {% else %}
+    for i in range(len(msg.{{ field }})):
+        {{ _init_simple_field(field ~ '[i]', type_token.type_token) }}
+        {% endif %}
+    {% else %}
+    {{ _init_simple_field(field, type_token) }}
+    {% endif %}
+    {% endfor %}
+    return msg
+{% endmacro %}
+
+
+{##############################################################################
+ # Template Body
+ ##############################################################################}
+
+{% include "base_strategies.py" ignore missing %}
+
+{% if random_headers %}
+@strategies.composite
+def ros_std_msgs_Header(draw, msg=None):
+    msg = msg or std_msgs.Header()
+    msg.stamp = draw(ros_time())
+    msg.frame_id = draw(ros_string())
+    assume(msg.stamp.secs <= 4294967295)
+    assume(msg.stamp.nsecs <= 4294967295)
+    return msg
+
+std_msgs_Header = ros_std_msgs_Header
+{% else %}
+import genpy
+
+class AutoTime(genpy.Time):
+    __slots__ = ("_secs", "_nsecs", "_set")
+
+    def __init__(self, secs=0, nsecs=0):
+        self._secs = secs
+        self._nsecs = nsecs
+        self._set = True
+        super(AutoTime, self).__init__(secs, nsecs)
+        self._set = False
+
+    @property
+    def secs(self):
+        if not self._set:
+            stamp = rospy.get_rostime()
+            self._secs = stamp.secs
+            self._nsecs = stamp.nsecs
+            self._set = True
+        return self._secs
+
+    @secs.setter
+    def secs(self, t):
+        self._secs = t
+        self._set = False
+
+    @property
+    def nsecs(self):
+        if not self._set:
+            stamp = rospy.get_rostime()
+            self._secs = stamp.secs
+            self._nsecs = stamp.nsecs
+            self._set = True
+        return self._nsecs
+
+    @nsecs.setter
+    def nsecs(self, t):
+        self._nsecs = t
+        self._set = False
+
+
+@strategies.composite
+def ros_std_msgs_Header(draw, msg=None):
+    msg = msg or std_msgs.Header()
+    msg.stamp = AutoTime()
+    msg.frame_id = draw(ros_string())
+    return msg
+
+std_msgs_Header = ros_std_msgs_Header
+{% endif %}
+
+{% for type_token in type_tokens %}
+
+{{ default_msg(type_token) }}
+{% endfor %}

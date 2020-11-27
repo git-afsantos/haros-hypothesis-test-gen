@@ -25,6 +25,8 @@
 # Imports
 ###############################################################################
 
+from builtins import map
+from builtins import object
 from builtins import range # Python 2 and 3: forward-compatible
 
 
@@ -89,7 +91,7 @@ class DynamicAccessor(Accessor):
         if field_name == "*":
             return _universal
         star, indices = field_name.split("\\")
-        indices = map(int, indices.split(","))
+        indices = list(map(int, indices.split(",")))
         return self._all_except(indices)
 
     def _all_except(self, indices):

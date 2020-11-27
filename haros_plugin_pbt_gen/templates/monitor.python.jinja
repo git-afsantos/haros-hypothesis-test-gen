@@ -1,3 +1,5 @@
+{% import 'rv_common.python.jinja' as rv %}
+
 {###############################################################################
     Utility Macros
 ###############################################################################}
@@ -10,118 +12,6 @@
 {%- else -%}
 ()
 {%- endif %}
-{% endmacro %}
-
-
-{###############################################################################
-    EventListener Macros
-###############################################################################}
-
-{% macro _rhs_value(value) %}
-{% if value.is_literal -%}
-    {{ value.value }}
-{%- elif value.is_reference -%}
-msg.{{ value }}
-{%- elif value.is_variable -%}
-    {% if value.external -%}
-entry.state[{{ value }}]
-    {%- else -%}
-e.state[{{ value }}]
-    {%- endif %}
-{%- endif %}
-{% endmacro %}
-
-{% macro _field_clause(ref, op, value) %}
-{% if op == '=' -%}
-{{ ref }} == {{ _rhs_value(value) }}
-{%- elif op == 'in' -%}
-    {% if value.is_range -%}
-        {% if value.exclude_lower -%}
-            {{ ref }} > {{ _rhs_value(value.lower_bound) }}
-        {%- else -%}
-            {{ ref }} >= {{ _rhs_value(value.lower_bound) }}
-        {%- endif %}{# -#}
-        {{ ' and ' }}{# -#}
-        {% if value.exclude_upper -%}
-            {{ ref }} < {{ _rhs_value(value.upper_bound) }}
-        {%- else -%}
-            {{ ref }} <= {{ _rhs_value(value.upper_bound) }}
-        {%- endif %}
-    {%- else -%}
-        {% set disjoin = joiner(' or ') %}
-        {% for item in value.values %}{# -#}
-            {{ disjoin() }}{{ ref }} == {{ _rhs_value(item) }}{# -#}
-        {% endfor %}
-    {%- endif %}
-{%- elif op == 'not in' -%}
-    {% if value.is_range -%}
-        {% if value.exclude_lower -%}
-            {{ ref }} <= {{ _rhs_value(value.lower_bound) }}
-        {%- else -%}
-            {{ ref }} < {{ _rhs_value(value.lower_bound) }}
-        {%- endif %}{# -#}
-        {{ ' or ' }}{# -#}
-        {% if value.exclude_upper -%}
-            {{ ref }} >= {{ _rhs_value(value.upper_bound) }}
-        {%- else -%}
-            {{ ref }} > {{ _rhs_value(value.upper_bound) }}
-        {%- endif %}
-    {%- else -%}
-        {% set disjoin = joiner(' and ') %}
-        {% for item in value.values %}{# -#}
-            {{ disjoin() }}{{ ref }} != {{ _rhs_value(item) }}{# -#}
-        {% endfor %}
-    {%- endif %}
-{%- else -%}
-{{ ref }} {{ op }} {{ _rhs_value(value) }}
-{%- endif %}
-{% endmacro %}
-
-{% macro _field_parts_to_str(root, accessors) -%}
-{{ root }}{% for accessor in accessors -%}
-    {% if accessor.is_indexed -%}
-        [{{ accessor.key }}]
-    {%- else -%}
-        .{{ accessor.key }}
-    {%- endif %}
-{%- endfor %}
-{%- endmacro %}
-
-{% macro _field_condition(condition, fun=none) -%}
-{% if condition.field.is_multi_field -%}
-    {% set ns = namespace(py = [], root = 'msg') %}
-    {% set _f_loops, _rem_expr = condition.field.loops() %}
-    {% for accessors, it in _f_loops -%}
-        {% set _array = _field_parts_to_str(ns.root, accessors) %}
-        {% if '\\' in it.key %}
-            {% set _array = 'all_except(' ~ _array ~ ', ('
-                ~ it.key[2:] ~ ',))' %}
-        {% endif %}
-        {% set ns.root = 'x' ~ loop.index %}{# -#}
-        {{ ns.py.append('for x' ~ loop.index ~ ' in ' ~ _array)|d("", true) }}
-    {%- endfor %}
-    {% set ref = _field_parts_to_str(ns.root, _rem_expr) %}
-all({{ _field_clause(ref, condition.operator, condition.value) }} {# -#}
-    {{ ns.py|join(' ') }})
-{%- else -%}
-    {% set ref = 'msg.' ~ condition.field -%}
-    {% if fun -%}
-        {%- set ref = fun ~ '(' ~ ref ~ ')' -%}
-    {%- endif -%}
-    {{ _field_clause(ref, condition.operator, condition.value) }}
-{%- endif %}
-{%- endmacro %}
-
-
-{% macro _inline_conditions(conditions) %}
-{% for condition in conditions %} and {{ _field_condition(condition) }}{# -#}
-{% endfor %}
-{% endmacro %}
-
-{% macro _length_conditions(event) %}
-{% for condition in event.length_conditions %} and {# -#}
-{{ _field_condition(condition, fun='len') }}{# -#}
-{% endfor %}
 {% endmacro %}
 
 
@@ -139,7 +29,7 @@ requirement = False
 for entry in self.{{ dep.var_name }}.log:
     age = seq_start - entry.time
     if age >= {{ dep.log_gap }} and age <= {{ dep.log_age }}{# -#}
-            {{ _inline_conditions(event.get_dep_conditions(dep.key())) }}:
+            {{ rv.inline_conditions(event.get_dep_conditions(dep.key())) }}:
         requirement = True
         break
     {% elif dep.log_level == 1 %}
@@ -222,8 +112,7 @@ class {{ event.class_name }}(EventListener):
         timed_out = 0
         {% if not event.reads_state %}
         condition = True{# -#}
-            {{ _length_conditions(event) }}{# -#}
-            {{ _inline_conditions(event.conditions) }}
+            {{ rv.inline_conditions(event.conditions) }}
         {% endif %}
         i = len(self.active) - 1
         while i >= 0:
@@ -233,8 +122,7 @@ class {{ event.class_name }}(EventListener):
                 timed_out += ((not e.subsumed and not e.matches) and 1) or 0
             {% if event.reads_state %}
             elif time >= e.min_time{# -#}
-                {{ _length_conditions(event) }}{# -#}
-                {{ _inline_conditions(event.conditions) }}:
+                {{ rv.inline_conditions(event.conditions) }}:
                 {% if event.dependencies %}
 {{ _check_dep_log(event)|indent(width=16, first=true) }}
                 {% endif %}
@@ -366,11 +254,13 @@ def _on_cb{{ i }}(self, msg, time=None):
     # topic: {{ topic }}
     time = get_time() if time is None else time
     with self.lock:
+        activated = False
+        terminated = False
     {% if has_timeout %}
         if time > self.scope_max_time:
             self._deactivate(self.scope_max_time)
     {% endif %}
-    {% for event in events %}
+    {% for event in events|reverse %}
         forks, timed_out = self.{{ event.var_name }}.process(msg, time)
         {% if event.is_behaviour %}
             {% if event.is_leaf %}
@@ -384,11 +274,13 @@ def _on_cb{{ i }}(self, msg, time=None):
         {% elif event.is_trigger and event.is_leaf %}
         self.trigger_count += forks
         {% elif event.is_activator and event.is_leaf %}
-        if forks:
+        if forks and not terminated:
             self._activate(time)
+            activated = True
         {% elif event.is_terminator and event.is_leaf %}
-        if forks:
+        if forks and not activated:
             self._deactivate(time)
+            terminated = True
         {% endif %}
     {% else %}
         pass
@@ -400,6 +292,8 @@ def _on_cb{{ i }}(self, msg, time=None):
     # topic: {{ topic }}
     time = get_time() if time is None else time
     with self.lock:
+        activated = False
+        terminated = False
     {% if has_timeout %}
         if time > self.scope_max_time:
         {% if slack == 0.0 %}
@@ -412,7 +306,7 @@ def _on_cb{{ i }}(self, msg, time=None):
         if time > self.slack_max_time:
             self._deactivate(time)
     {% endif %}
-    {% for event in events %}
+    {% for event in events|reverse %}
         forks, timed_out = self.{{ event.var_name }}.process(msg, time)
         {% if event.is_behaviour %}
             {% if event.is_leaf %}
@@ -426,10 +320,11 @@ def _on_cb{{ i }}(self, msg, time=None):
         {% elif event.is_trigger and event.is_leaf %}
         self.trigger_count += forks
         {% elif event.is_activator and event.is_leaf %}
-        if forks:
+        if forks and not terminated:
             self._activate(time)
+            activated = True
         {% elif event.is_terminator and event.is_leaf %}
-        if forks:
+        if forks and not activated:
             {% if slack == 0.0 %}
             self._deactivate(time)
             {% else %}
@@ -437,6 +332,7 @@ def _on_cb{{ i }}(self, msg, time=None):
             if time > self.slack_max_time:
                 self._deactivate(time)
             {% endif %}
+            terminated = True
         {% endif %}
     {% else %}
         pass
@@ -460,9 +356,11 @@ def on_launch(self, time):
     self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
             {% endfor %}
         {% endif %}
-        {% for event in monitor.behaviour.roots %}
+        {% if monitor.is_precedence or monitor.is_absence or monitor.is_existence %}
+            {% for event in monitor.behaviour.roots %}
     self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
-        {% endfor %}
+            {% endfor %}
+        {% endif %}
     {% else %}
         {% for event in monitor.activator.roots %}
     self.{{ event.var_name }}.add(time, [None] * {{ vc }}, -1, inf)
@@ -555,7 +453,19 @@ def _deactivate(self, time):
 {% endmacro %}
 
 
-{% macro Monitor(monitor, slack=0.0, debug=false) %}
+
+{##############################################################################
+    Template Body
+ ##############################################################################}
+
+{# expects (monitor, slack, debug) #}
+
+
+{% for event in monitor.events %}
+{{ Listener(event) }}
+
+{% endfor %}
+
 class {{ monitor.class_name }}(PropertyMonitor):
     {{ _monitor_slots(monitor) }}
 
@@ -630,4 +540,3 @@ class {{ monitor.class_name }}(PropertyMonitor):
             {% endfor %}
         {% endfor %}
         pass
-{% endmacro %}

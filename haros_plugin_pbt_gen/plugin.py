@@ -25,20 +25,24 @@
 # Imports
 ###############################################################################
 
+from builtins import str
+from builtins import object
 from builtins import range # Python 2 and 3: forward-compatible
 from collections import namedtuple
 from itertools import chain as iterchain
 import os
 
-from haros.hpl.hpl_ast import HplAstObject
-from haros.hpl.ros_types import get_type
+from haros.hpl.hpl_ast import HplVacuousTruth
+from haros.hpl.ros_types import get_type # FIXME
 from jinja2 import Environment, PackageLoader
 
 from .events import MonitorTemplate
 from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
+    ContradictionError
 )
 from .selectors import Selector
+from .util import StrategyError, convert_to_old_format
 
 
 ###############################################################################
@@ -59,20 +63,15 @@ INF = float("inf")
 config_num = 0
 
 def configuration_analysis(iface, config):
-    if not config.launch_commands or not config.nodes.enabled:
+    if (not config.launch_commands or not config.nodes.enabled
+            or not config.hpl_properties):
         return
-    properties = [p for p in config.hpl_properties
-                    if isinstance(p, HplAstObject)]
-    if not properties:
-        return
-    assumptions = [p for p in config.hpl_assumptions
-                     if isinstance(p, HplAstObject)]
     settings = config.user_attributes.get(KEY, EMPTY_DICT)
     _validate_settings(iface, settings)
     try:
         global config_num
         config_num += 1
-        gen = TestGenerator(iface, config, properties, assumptions, settings)
+        gen = TestGenerator(iface, config, settings)
         gen.make_tests(config_num)
     except SpecError as e:
         iface.log_error(e.message)
@@ -87,6 +86,22 @@ def _validate_settings(iface, settings):
     if val not in exp:
         iface.log_warning(msg.format(val, exp, default))
         settings["extra_monitors"] = default
+    val = settings.get("deadline")
+    exp = (None, "float >= 0.0",)
+    default = 10.0
+    if val is None:
+        settings["deadline"] = default
+    elif not isinstance(val, float) or val < 0.0:
+        iface.log_warning(msg.format(val, exp, default))
+        settings["deadline"] = default
+    val = settings.get("max_scopes")
+    exp = (None, "int >= 1",)
+    default = 2
+    if val is None:
+        settings["max_scopes"] = default
+    elif not isinstance(val, int) or val < 1:
+        iface.log_warning(msg.format(val, exp, default))
+        settings["max_scopes"] = default
 
 
 ################################################################################
@@ -94,15 +109,18 @@ def _validate_settings(iface, settings):
 ################################################################################
 
 PublisherTemplate = namedtuple("PublisherTemplate",
-    ("topic", "type_token", "rospy_type", "strategies"))
+    ("topic", "type_token", "rospy_type"))
 
-TestTemplate = namedtuple("TestTemplate", ("monitor", "custom_strategies",
-    "publishers", "subscribers", "pkg_imports", "property_text"))
+TestTemplate = namedtuple("TestTemplate",
+    ("default_msg_strategies", "custom_msg_strategies",
+     "trace_strategy", "monitor_templates",
+     "test_case_template", "pkg_imports", "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
 
-CustomMsgStrategy = namedtuple("CustomMsgStrategy",
-    ("name", "args", "pkg", "msg", "statements"))
+MsgStrategy = namedtuple("MsgStrategy",
+    ("name", "args", "pkg", "msg", "statements", "is_default",
+     "topic", "alias"))
 
 
 class SpecError(Exception):
@@ -114,42 +132,78 @@ class SpecError(Exception):
 ################################################################################
 
 class TestGenerator(object):
-    def __init__(self, iface, config, properties, assumptions, settings):
+    def __init__(self, iface, config, settings):
         self.iface = iface
         self.config = config
-        self.properties = properties
-        self.assumptions = {p.topic: p.msg_filter for p in assumptions}
         self.settings = settings
         self.commands = config.launch_commands
-        self.nodes = list(n.rosname.full for n in config.nodes.enabled)
         self.subbed_topics = self._get_open_subbed_topics()
         self.pubbed_topics = self._get_all_pubbed_topics()
-        self._type_check_topics()
-        self.subscribers = self._get_subscribers()
-        self.pkg_imports = {"std_msgs"}
-        for type_token in self.pubbed_topics.values():
-            self.pkg_imports.add(type_token.package)
-        self.default_strategies = self._get_default_strategies()
+        assumptions = self._get_assumptions()
+        data_axioms = self._get_data_axioms()
+        time_axioms = self._get_time_axioms()
+        self.strategies = StrategyManager(self.subbed_topics, assumptions,
+            data_axioms, time_axioms, deadline=settings.get("deadline"))
+        self.jinja_env = Environment(
+            loader=PackageLoader(KEY, "templates"),
+            line_statement_prefix=None,
+            line_comment_prefix=None,
+            trim_blocks=True,
+            lstrip_blocks=True,
+            autoescape=False
+        )
+        self.node_names = list(n.rosname.full for n in config.nodes.enabled)
 
     def make_tests(self, config_num):
-        monitors, tests = self._make_monitors_and_tests()
+        hpl_properties = self._filter_properties()
+        monitors, axioms = self._make_monitors(hpl_properties)
+        tests = self._make_test_templates(monitors, axioms)
         for i in range(len(tests)):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
-            test_monitors = self._get_test_monitors(testable, monitors)
-            self._write_test_files(tests[i], test_monitors, filename)
+            self._write_test_files(tests[i], filename, axioms)
         if not tests:
             msg = "None of the given properties for {} is directly testable."
             msg = msg.format(self.config.name)
             self.iface.log_warning(msg)
             # TODO generate "empty" monitor, all others become secondary
 
+    def _filter_properties(self):
+        properties = []
+        for p in self.config.hpl_properties:
+            if not p.is_fully_typed():
+                self.iface.log_warning(
+                    "Skipping untyped property:\n{}".format(p))
+                continue
+            if p.scope.activator is not None:
+                topic = p.scope.activator.topic
+                if topic not in self.subbed_topics:
+                    if topic not in self.pubbed_topics:
+                        continue
+            if p.scope.terminator is not None:
+                topic = p.scope.terminator.topic
+                if topic not in self.subbed_topics:
+                    if topic not in self.pubbed_topics:
+                        continue
+            if p.pattern.trigger is not None:
+                topic = p.pattern.trigger.topic
+                if topic not in self.subbed_topics:
+                    if topic not in self.pubbed_topics:
+                        continue
+            topic = p.pattern.behaviour.topic
+            if topic not in self.subbed_topics:
+                if topic not in self.pubbed_topics:
+                    continue
+            properties.append(p)
+        return properties
+
+    # FIXME fetching type tokens should be part of HAROS
     def _get_open_subbed_topics(self):
         ignored = self.settings.get("ignored", ())
-        subbed = {} # topic -> msg_type (TypeToken)
+        subbed = {} # topic -> TypeToken
         for topic in self.config.topics.enabled:
             if topic.subscribers and not topic.publishers:
-                if topic.unresolved:
+                if topic.unresolved or topic.type == "?":
                     msg = "Skipping unresolved topic {} ({}).".format(
                         topic.rosname.full, self.config.name)
                     self.iface.log_warning(msg)
@@ -161,11 +215,12 @@ class TestGenerator(object):
                     subbed[topic.rosname.full] = get_type(topic.type)
         return subbed
 
+    # FIXME fetching type tokens should be part of HAROS
     def _get_all_pubbed_topics(self):
         ignored = self.settings.get("ignored", ())
         pubbed = {} # topic -> msg_type (TypeToken)
         for topic in self.config.topics.enabled:
-            if topic.unresolved:
+            if topic.unresolved or topic.type == "?":
                 msg = "Skipping unresolved topic {} ({}).".format(
                     topic.rosname.full, self.config.name)
                 self.iface.log_warning(msg)
@@ -179,6 +234,14 @@ class TestGenerator(object):
                     pubbed[topic.rosname.full] = get_type(topic.type)
         return pubbed
 
+    def _get_publishers(self):
+        # FIXME build list based on self.strategies stages
+        pubs = []
+        for topic, type_token in self.subbed_topics.items():
+            rospy_type = type_token.type_name.replace("/", ".")
+            pubs.append(PublisherTemplate(topic, type_token, rospy_type))
+        return pubs
+
     def _get_subscribers(self):
         subs = []
         for topic, type_token in self.subbed_topics.items():
@@ -187,153 +250,90 @@ class TestGenerator(object):
             subs.append(Subscriber(topic, type_token, False))
         return subs
 
-    def _get_default_strategies(self):
-        queue = list(self.subbed_topics.values())
-        strategies = {}
-        while queue:
-            new_queue = []
-            for type_token in queue:
-                if type_token.is_primitive or type_token.is_header:
-                    continue
-                if type_token.is_time or type_token.is_duration:
-                    continue
-                if type_token.is_array or type_token.type_name in strategies:
-                    continue
-                self.pkg_imports.add(type_token.package)
-                strategies[type_token.type_name] = type_token
-                new_queue.extend(type_token.fields.values())
-            queue = new_queue
-        return tuple(strategies.values())
-
-    NO_TOPIC = "Configuration '{}' does not publish or subscribe topic '{}'"
-
-    def _type_check_topics(self):
-        for prop in self.properties:
-            for event in prop.events():
-                if event.is_publish:
-                    base_type = self.pubbed_topics.get(event.topic)
-                    if base_type is None:
-                        try:
-                            base_type = self.subbed_topics[event.topic]
-                        except KeyError:
-                            raise SpecError(self.NO_TOPIC.format(
-                                self.config.name, event.topic))
-                    self._type_check_msg_filter(event.msg_filter, base_type)
-        for topic, msg_filter in self.assumptions.items():
-            base_type = self.pubbed_topics.get(topic)
-            if base_type is None:
-                try:
-                    base_type = self.subbed_topics[topic]
-                except KeyError:
-                    raise SpecError(self.NO_TOPIC.format(
-                        self.config.name, topic))
-            self._type_check_msg_filter(msg_filter, base_type)
-
-    NO_FIELD = "Message type '{}' does not contain field '{}'"
-
-    NAN = "Expected a number, but found {} ({})"
-
-    NOT_LIST = "Expected a var-length array, but found {} ({})"
-
-    def _type_check_msg_filter(self, msg_filter, base_type):
-        for condition in msg_filter.conditions:
-            try:
-                selector = Selector(condition.field.token, base_type)
-            except KeyError:
-                raise SpecError(self.NO_FIELD.format(
-                    base_type.type_name, condition.field.token))
-            if condition.requires_number:
-                if not selector.ros_type.is_number:
-                    raise SpecError(self.NAN.format(
-                        condition.field.token, base_type.type_name))
-            # TODO check that values fit within types
-        for condition in msg_filter.length_conditions:
-            try:
-                selector = Selector(condition.field.token, base_type)
-            except KeyError:
-                raise SpecError(self.NO_FIELD.format(
-                    base_type.type_name, condition.field.token))
-            if not (selector.ros_type.is_array
-                    and not selector.ros_type.is_fixed_length):
-                raise SpecError(self.NOT_LIST.format(
-                    condition.field.token, base_type.type_name))
-
-    def _make_monitors_and_tests(self):
-        all_monitors = []
-        tests = []
-        for i in range(len(self.properties)):
-            p = self.properties[i]
+    def _make_monitors(self, hpl_properties):
+        axioms = []
+        monitors = []
+        for i in range(len(hpl_properties)):
+            p = hpl_properties[i]
             uid = "P" + str(i + 1)
             monitor = MonitorTemplate(
                 uid, p, self.pubbed_topics, self.subbed_topics)
-            self._inject_assumptions(monitor)
-            all_monitors.append(monitor)
-            if monitor.is_testable:
-                publishers = self._get_publishers(monitor.terminator)
-                custom = CustomStrategyBuilder()
-                custom.make_strategies(monitor, publishers, self.assumptions)
-                # ^ custom.make_strategies() may change publishers
-                custom.pkg_imports.update(self.pkg_imports)
-                publishers = list(publishers.values())
-                self._apply_slack(monitor)
-                tests.append(TestTemplate(
-                    monitor, custom.strategies, publishers, self.subscribers,
-                    custom.pkg_imports, monitor.hpl_string))
-            else:
-                msg = ("Cannot produce a test script for the "
-                       "following property: ")
-                msg += monitor.hpl_string
-                self.iface.log_warning(msg)
             monitor.variable_substitution()
-        return all_monitors, tests
+            if monitor.is_input_only:
+                axioms.append(monitor)
+                data = {"monitor": monitor}
+                monitor.python_eval = self._render_template(
+                    "eval.python.jinja", data, strip=True)
+            else:
+                self._apply_slack(monitor)
+                monitors.append(monitor)
+            data = {
+                "monitor": monitor,
+                "slack": self.settings.get("slack", 0.0),
+                "debug": self.settings.get("debug", False),
+            }
+            monitor.python = self._render_template(
+                "monitor.python.jinja", data, strip=True)
+        return monitors, axioms
 
-    def _get_test_monitors(self, test_case, monitors):
+    def _make_test_templates(self, monitors, axioms):
+        tests = []
+        for i in range(len(monitors)):
+            p = monitors[i].hpl_property
+            try:
+                strategies = self.strategies.build_strategies(p)
+                data = {
+                    "type_tokens": list(self.strategies.default_strategies.values()),
+                    "random_headers": self.settings.get("random_headers", True),
+                }
+                py_default_msgs = self._render_template(
+                    "default_msg_strategies.python.jinja",
+                    data, strip=True)
+                py_custom_msgs = self._render_template(
+                    "custom_msg_strategies.python.jinja",
+                    strategies._asdict(), strip=True)
+            except StrategyError as e:
+                self.iface.log_warning(
+                    "Cannot produce a test for:\n'{}'\n\n{}".format(p, e))
+                continue
+            ms = self._get_test_monitors(i, monitors)
+            subs = self._get_subscribers()
+            data = {
+                "main_monitor": monitors[i].class_name,
+                "monitor_classes": [m.class_name for m in ms],
+                "axiom_classes": [m.class_name for m in axioms],
+                "publishers": self._get_publishers(),
+                "subscribers": subs,
+                "commands": self.commands,
+                "nodes": self.node_names,
+                "settings": self.settings,
+                "is_liveness": p.is_liveness,
+            }
+            py_test_case = self._render_template(
+                "test_case.python.jinja", data, strip=True)
+            py_monitors = [m.python for m in ms]
+            pkg_imports = self.strategies.pkg_imports
+            for sub in subs:
+                pkg_imports.add(sub.type_token.package)
+            tests.append(TestTemplate(py_default_msgs, py_custom_msgs,
+                self._render_trace_strategy(p, strategies), py_monitors,
+                py_test_case, pkg_imports, monitors[i].hpl_string,))
+        return tests
+
+    def _get_test_monitors(self, i, monitors):
         extras = self.settings.get("extra_monitors", True)
         if extras is True:
             return monitors
         if extras is False:
-            return (test_case.monitor,)
+            return (monitors[i],)
         if extras == "safety":
-            ms = [m for m in monitors if m.is_safety]
-            if test_case.monitor not in ms:
-                ms.append(test_case.monitor)
+            ms = []
+            for j in range(len(monitors)):
+                if monitors[j].is_safety or j == i:
+                    ms.append(monitors[j])
             return ms
         # any other value is invalid; assume default behaviour
         return monitors
-
-    def _get_publishers(self, terminator):
-        avoid = set()
-        if terminator is not None:
-            for event in terminator.roots:
-                avoid.add(event.topic)
-        pubs = {}
-        for topic, type_token in self.subbed_topics.items():
-            if topic not in avoid:
-                rospy_type = type_token.type_name.replace("/", ".")
-                pubs[topic] = PublisherTemplate(
-                    topic, type_token, rospy_type, [])
-        return pubs
-
-    def _inject_assumptions(self, monitor):
-        event_map = {}
-        for event in monitor.events:
-            msg_filter = self.assumptions.get(event.topic)
-            if msg_filter is not None:
-                event.conditions.extend(msg_filter.conditions)
-                event.length_conditions.extend(msg_filter.length_conditions)
-            if event.alias:
-                event_map[event.alias] = event
-            lengths = {}
-            for condition in event.conditions:
-                self._length_for_field(condition.field.token,
-                    event.type_token, lengths)
-                self._length_for_value(condition.value, event.type_token,
-                    lengths, event_map)
-            # v -- NOTE saved_vars is probably not yet assigned
-            for field_token in event.saved_vars.values():
-                self._length_for_field(field_token, event.type_token, lengths)
-            for token, min_length in lengths.items():
-                event.add_min_length_condition(token, min_length)
 
     def _length_for_field(self, field_token, type_token, lengths):
         selector = Selector(field_token, type_token)
@@ -377,255 +377,711 @@ class TestGenerator(object):
         slack = self.settings.get("slack", 0.0)
         if slack < 0.0:
             raise ValueError("slack time cannot be negative")
-        for event in monitor.events:
-            event.duration += slack
-            event.log_age += slack
-            if event.external_timer is not None:
-                event.external_timer += slack
+        monitor.apply_slack(slack)
 
-    def _write_test_files(self, test_case, all_monitors, filename, debug=False):
-        # test_case: includes monitor for which traces will be generated
-        # all_monitors: used for secondary monitors
-        env = Environment(
-            loader=PackageLoader(KEY, "templates"),
-            line_statement_prefix=None,
-            line_comment_prefix=None,
-            trim_blocks=True,
-            lstrip_blocks=True,
-            autoescape=False
-        )
-        if debug:
-            template = env.get_template("debug_monitor.python.jinja")
-        else:
-            template = env.get_template("test_script.python.jinja")
+    def _write_test_files(self, test_template, filename, axioms, debug=False):
         data = {
-            "events": tuple(e for m in all_monitors for e in m.events),
-            "main_monitor": test_case.monitor,
-            "monitors": all_monitors,
-            "default_strategies": self.default_strategies,
-            "custom_strategies": test_case.custom_strategies,
-            "publishers": test_case.publishers,
-            "subscribers": test_case.subscribers,
-            "settings": self.settings,
+            "pkg_imports": test_template.pkg_imports,
+            "default_msg_strategies": test_template.default_msg_strategies,
+            "custom_msg_strategies": test_template.custom_msg_strategies,
+            "trace_strategy": test_template.trace_strategy,
+            "monitors": test_template.monitor_templates,
+            "axioms": [m.python for m in axioms],
+            "eval_functions": [m.python_eval for m in axioms],
+            "test_case": test_template.test_case_template,
             "log_level": "DEBUG",
-            "pkg_imports": test_case.pkg_imports,
-            "property_text": test_case.property_text,
-            "slack": self.settings.get("slack", 0.0),
-            "nodes": self.nodes,
-            "commands": self.commands
+            "property_text": test_template.property_text,
         }
+        if debug:
+            python = self._render_template(
+                "debug_monitor.python.jinja", data, strip=False)
+        else:
+            python = self._render_template(
+                "test_script.python.jinja", data, strip=False)
         with open(filename, "w") as f:
-            f.write(template.render(**data).encode("utf-8"))
+            f.write(python)
         mode = os.stat(filename).st_mode
         mode |= (mode & 0o444) >> 2
         os.chmod(filename, mode)
         self.iface.export_file(filename)
 
-
-################################################################################
-# Custom Message Strategies
-################################################################################
-
-class CustomStrategyBuilder(object):
-    def __init__(self):
-        self.strategies = []
-        self.pkg_imports = set()
-        self.types_by_message = {}
-
-    def fake_strategies(self, monitor):
-        # this is basically just type checking
-        # FIXME this is not working yet - cannot deal with aliases
-        for event in monitor.events:
-            try:
-                strategy = self._msg_generator(
-                    event.type_token, event.conditions)
-                strategy.build()
-            except (KeyError, IndexError) as e:
-                raise SpecError("unable to find field:" + str(e))
-            except CyclicDependencyError as e:
-                raise SpecError("found cyclic dependencies: " + str(e))
-            except InvalidFieldOperatorError as e:
-                raise SpecError("invalid use of operator " + str(e))
-
-    def make_strategies(self, monitor, publishers, assumptions):
-        self.strategies = []
-        for topic, pub in publishers.items():
-            msg_filter = assumptions.get(topic)
-            if msg_filter is not None:
-                self.pkg_imports.add(pub.type_token.package)
-                self.strategies.append(self._publisher(pub, msg_filter))
-        if monitor.activator is not None:
-            # the whole chain must happen
-            for event in monitor.activator.events:
-                assert event.topic in publishers, "{} not in {}; «{}»".format(
-                    event.topic, tuple(publishers), monitor.hpl_string)
-                pub = publishers[event.topic]
-                self.pkg_imports.add(pub.type_token.package)
-                if event.has_conditions:
-                    self.strategies.append(self._event(event, pub))
-                elif pub.strategies:
-                    event.strategy = pub.strategies[-1]
-        trigger = monitor.trigger
-        if trigger is not None:
-            if (monitor.is_safety
-                    and not any(e.log_age < INF for e in trigger.leaves)):
-                # make sure the roots do not happen; prevent the chain
-                # TODO chain can theoretically be prevented at any point
-                for event in trigger.roots:
-                    if (event.topic in publishers and not event.has_conditions
-                            and not event.ref_count):
-                        # negation of any msg is no msg at all
-                        del publishers[event.topic]
-                for event in trigger.roots:
-                    if event.topic in publishers and event.has_conditions:
-                        pub = publishers[event.topic]
-                        self.pkg_imports.add(pub.type_token.package)
-                        strat = self._event(event, pub, negate=True)
-                        self.strategies.append(strat)
-                        pub.strategies.append(strat)
-            elif monitor.is_liveness:
-                # the whole chain must happen
-                for event in trigger.events:
-                    assert event.topic in publishers, "{} not in {}".format(
-                        event.topic, publishers)
-                    pub = publishers[event.topic]
-                    self.pkg_imports.add(pub.type_token.package)
-                    if event.has_conditions:
-                        self.strategies.append(self._event(event, pub))
-                    elif pub.strategies:
-                        event.strategy = pub.strategies[-1]
-        return self.strategies
-
-    def _publisher(self, publisher, msg_filter):
-        type_token = publisher.type_token
-        self.types_by_message[None] = type_token
-        strategy = self._strategy(type_token, msg_filter.conditions,
-                                  msg_filter.length_conditions)
-        publisher.strategies.append(strategy)
-        return strategy
-
-    def _event(self, event, publisher, negate=False):
-        type_token = publisher.type_token
-        self.types_by_message[event.alias] = type_token
-        if event.alias is not None:
-            self.types_by_message[None] = type_token
-        if negate:
-            # TODO improve this, not all must be negated at once;
-            #   it should loop and negate one condition at a time.
-            conditions = [c.negation() for c in event.conditions]
-            len_conds = [c.negation() for c in event.length_conditions]
+    def _render_trace_strategy(self, prop, strategies):
+        data = dict(strategies._asdict())
+        data["reps"] = 1
+        if prop.scope.is_after_until:
+            data["reps"] = self.settings.get("max_scopes", 2)
+        if prop.pattern.is_absence:
+            return self._render_template(
+                "trace_absence.python.jinja", data, strip=True)
+        elif prop.pattern.is_existence:
+            return self._render_template(
+                "trace_existence.python.jinja", data, strip=True)
+        elif prop.pattern.is_requirement:
+            return self._render_template(
+                "trace_precedence.python.jinja", data, strip=True)
+        elif prop.pattern.is_prevention:
+            return self._render_template(
+                "trace_prevention.python.jinja", data, strip=True)
+        elif prop.pattern.is_response:
+            return self._render_template(
+                "trace_response.python.jinja", data, strip=True)
         else:
-            conditions = event.conditions
-            len_conds = event.length_conditions
-        strategy = self._strategy(type_token, conditions, len_conds)
-        event.strategy = strategy
-        return strategy
+            assert False, "unknown property pattern"
 
-    def _strategy(self, type_token, conditions, len_conditions):
-        strategy = self._msg_generator(type_token, conditions, len_conditions)
-        i = len(self.strategies) + 1
-        name = "cms{}_{}_{}".format(i, type_token.package, type_token.message)
-        return CustomMsgStrategy(name, strategy.args, type_token.package,
-                                 type_token.message, strategy.build())
+    def _render_template(self, filename, data, strip=True):
+        template = self.jinja_env.get_template(filename)
+        text = template.render(**data).encode("utf-8")
+        if strip:
+            text = text.strip()
+        return text
 
-    def _msg_generator(self, type_token, conditions, len_conditions):
+    def _get_assumptions(self):
+        assumptions = []
+        for p in self.config.hpl_assumptions:
+            if p.is_fully_typed():
+                assumptions.append(p)
+            else:
+                self.iface.log_warning(
+                    "Skipping untyped assumption:\n{}".format(p))
+        return assumptions
+
+    def _get_data_axioms(self):
+        axioms = []
+        for p in self.config.hpl_properties:
+            if not p.scope.is_global:
+                continue # FIXME
+            if not p.pattern.is_absence:
+                continue
+            b = p.pattern.behaviour
+            if not b.topic in self.subbed_topics:
+                continue
+            if not p.is_fully_typed():
+                self.iface.log_warning(
+                    "Skipping untyped assumption:\n{}".format(p))
+                continue
+            if b.predicate.is_vacuous and b.predicate.is_true:
+                del self.subbed_topics[b.topic]
+            else:
+                axioms.append(p)
+        return axioms
+
+    def _get_time_axioms(self):
+        axioms = []
+        for p in self.config.hpl_properties:
+            if not p.scope.is_global:
+                continue # FIXME
+            if not p.pattern.is_prevention:
+                continue
+            a = p.pattern.trigger
+            b = p.pattern.behaviour
+            if not a.topic in self.subbed_topics:
+                continue
+            if not b.topic in self.subbed_topics:
+                continue
+            if a.topic != b.topic:
+                continue
+            if not a.predicate.is_vacuous or not a.predicate.is_true:
+                continue
+            if not b.predicate.is_vacuous or not b.predicate.is_true:
+                continue
+            if not p.is_fully_typed():
+                self.iface.log_warning(
+                    "Skipping untyped assumption:\n{}".format(p))
+                continue
+            axioms.append(p)
+        return axioms
+
+
+################################################################################
+# Strategy Building
+################################################################################
+
+
+StrategyP = namedtuple("P", ("strategy", "spam"))
+StrategyQ = namedtuple("Q", ("strategy", "spam", "min_time"))
+StrategyA = namedtuple("A", ("strategy", "spam", "min_num", "max_num"))
+StrategyB = namedtuple("B", ("spam", "timeout"))
+
+Strategies = namedtuple("Strategies", ("p", "q", "a", "b"))
+
+
+# publisher stages:
+#   - stage 1 [1+ chunks]: up to activator (if not launch)
+#   - stage 2 [1+ chunks]: up to trigger
+#   - stage 3 [0+ chunks]: after trigger
+
+# 'globally' and 'until' do not have stage 1
+# only 'requires', 'causes' and 'forbids' have stage 2
+
+class StrategyManager(object):
+    __slots__ = ("stage1", "stage2", "stage3", "terminator", "deadline", "min_times")
+
+    def __init__(self, pubs, assumptions, data_axioms, time_axioms, deadline=10.0):
+        # pubs: topic -> ROS type token
+        # assumptions: [HplAssumption]
+        # data_axioms: [HplProperty]
+        # time_axioms: [HplProperty]
+        default_strategies = {}
+        pkg_imports = {"std_msgs"}
+        types_by_msg = {}
+        self.min_times = {p.pattern.trigger.topic: p.pattern.max_time
+                     for p in time_axioms}
+        # topic -> (type token, predicate)
+        topics = self._mapping_hpl_assumptions(pubs, assumptions)
+        self._mapping_hpl_axioms(topics, pubs, data_axioms)
+        self.stage1 = Stage1Builder(topics, default_strategies,
+            pkg_imports, types_by_msg)
+        self.stage2 = Stage2Builder(topics, default_strategies,
+            pkg_imports, types_by_msg)
+        self.stage3 = Stage3Builder(topics, default_strategies,
+            pkg_imports, types_by_msg)
+        self.terminator = TerminatorBuilder(topics, default_strategies,
+            pkg_imports, types_by_msg)
+        self.deadline = deadline
+
+    @property
+    def default_strategies(self):
+        assert (self.stage1.default_strategies is self.stage2.default_strategies
+            and self.stage1.default_strategies is self.stage3.default_strategies)
+        return self.stage1.default_strategies
+
+    @property
+    def pkg_imports(self):
+        assert (self.stage1.pkg_imports is self.stage2.pkg_imports
+            and self.stage1.pkg_imports is self.stage3.pkg_imports)
+        return self.stage1.pkg_imports
+
+    def build_strategies(self, prop):
+        self.stage1.build(prop)
+        self.stage2.build(prop)
+        self.stage3.build(prop)
+        self.terminator.build(prop)
+        b_timeout = self.deadline
+        a_min = 0
+        a_max = 0
+        if prop.pattern.is_response or prop.pattern.is_prevention:
+            assert self.stage2.trigger is not None
+            a_min = 1
+            a_max = 2
+            if prop.pattern.max_time < INF:
+                b_timeout = prop.pattern.max_time
+        elif prop.pattern.is_requirement:
+            assert self.stage2.trigger is not None
+            if prop.pattern.max_time < INF:
+                a_max = 2
+                b_timeout = prop.pattern.max_time
+        else:
+            assert self.stage2.trigger is None
+            if prop.pattern.max_time < INF:
+                b_timeout = prop.pattern.max_time
+        min_time = 0.0
+        if prop.scope.activator is None:
+            assert self.stage1.activator is None
+        else:
+            assert self.stage1.activator is not None
+        if prop.scope.terminator is None:
+            assert self.terminator.terminator is None
+        else:
+            assert self.terminator.terminator is not None
+            if prop.scope.activator is not None:
+                t1 = prop.scope.activator.topic
+                t2 = prop.scope.terminator.topic
+                if t1 == t2:
+                    min_time = self.min_times.get(t1, 0.0)
+        if not min_time < INF:
+            raise StrategyError(("impossible to generate traces due to "
+                "timing contraints: {}").format(prop))
+        p = StrategyP(self.stage1.activator,
+            list(self.stage1.strategies.values()))
+        q = StrategyQ(self.terminator.terminator,
+            list(self.stage3.strategies.values()), min_time)
+        a = StrategyA(self.stage2.trigger,
+            list(self.stage2.strategies.values()), a_min, a_max)
+        b = StrategyB(list(self.stage3.strategies.values()), b_timeout)
+        return Strategies(p, q, a, b)
+
+    def _mapping_hpl_axioms(self, topics, publishers, axioms):
+        for p in axioms:
+            event = p.pattern.behaviour
+            topic = event.topic
+            assert p.pattern.is_absence
+            if topic in publishers:
+                phi = event.predicate.negate()
+                rostype = publishers.get(topic)
+                if rostype is not None:
+                    prev = topics.get(topic)
+                    if prev is not None:
+                        assert prev[0] == rostype
+                        phi = prev[1].join(phi)
+                    topics[topic] = (rostype, phi)
+
+    def _mapping_hpl_assumptions(self, publishers, assumptions):
+        r = {}
+        for event in assumptions:
+            topic = event.topic
+            rostype = publishers.get(topic)
+            if rostype is not None:
+                r[topic] = (rostype, event.predicate)
+        for topic, rostype in publishers.items():
+            if topic not in r:
+                r[topic] = (rostype, HplVacuousTruth())
+        return r
+
+
+class StrategyBuilder(object):
+    __slots__ = ("types_by_message", "counter", "default_strategies",
+                 "pkg_imports")
+
+    def __init__(self, default_strategies, pkg_imports, type_map):
+        self.types_by_message = type_map
+        self.counter = 0
+        self.default_strategies = default_strategies
+        self.pkg_imports = pkg_imports
+
+    def _try_build(self, topic, rostype, phi, fun_name):
+        try:
+            self.strategies[topic] = self._build(
+                    rostype, phi, topic=topic, fun_name=fun_name)
+        except ContradictionError as e:
+            pass # TODO log
+
+    def _build(self, rostype, phi, topic=None, alias=None, fun_name="cms"):
+        assert phi.is_predicate
+        if phi.is_vacuous:
+            if phi.is_true:
+                return self._default_strategy(rostype, topic=topic)
+            else:
+                raise StrategyError(
+                    "unsatisfiable predicate for '{}' ({}, '{}')".format(
+                        topic, rostype, fun_name))
+        self._add_default_strategy_for_type(rostype)
+        # FIXME remove this and remake the strategy generator
+        conditions = convert_to_old_format(phi.condition)
+        strategy = self._msg_generator(rostype, conditions)
+        self.pkg_imports.add(rostype.package)
+        self.counter += 1
+        name = "{}{}_{}_{}".format(
+            fun_name, self.counter, rostype.package, rostype.message)
+        return MsgStrategy(name, strategy.args, rostype.package,
+            rostype.message, strategy.build(), False, topic, alias)
+
+    def _default_strategy(self, rostype, topic=None):
+        self._add_default_strategy_for_type(rostype)
+        return MsgStrategy(rostype.type_name.replace("/", "_"),
+            (), rostype.package, rostype.message, (), True, topic, None)
+
+    def _add_default_strategy_for_type(self, rostype):
+        assert rostype.is_message
+        if rostype.type_name not in self.default_strategies:
+            stack = [rostype]
+            while stack:
+                type_token = stack.pop()
+                if type_token.is_primitive or type_token.is_header:
+                    continue
+                if type_token.is_time or type_token.is_duration:
+                    continue
+                if type_token.type_name in self.default_strategies:
+                    continue
+                if type_token.is_array:
+                    stack.append(type_token.type_token)
+                else:
+                    assert type_token.is_message
+                    self.pkg_imports.add(type_token.package)
+                    self.default_strategies[type_token.type_name] = type_token
+                    stack.extend(type_token.fields.values())
+
+    def _msg_generator(self, type_token, conditions):
         strategy = MessageStrategyGenerator(type_token)
-        for condition in iterchain(conditions, len_conditions):
-            selector = Selector(condition.field.token, type_token)
+        for condition in conditions:
+            # FIXME Selector should accept AST nodes instead of strings
+            x = condition.operand1
+            if x.is_function_call:
+                assert x.function == "len", "what function is this"
+                x = x.arguments[0]
+            selector = Selector(str(x), type_token)
             strategy.ensure_generator(selector)
         for condition in conditions:
             self._set_condition(strategy, condition, type_token)
-        for condition in len_conditions:
-            self._set_len_condition(strategy, condition, type_token)
         return strategy
 
     def _set_condition(self, strategy, condition, type_token):
-        selector = Selector(condition.field.token, type_token)
-        value = self._value(condition.value, strategy)
-        if condition.is_eq:
+        operand1 = condition.operand1
+        if operand1.is_function_call:
+            assert operand1.function == "len", "what function is this"
+            return self._set_attr_condition(strategy, condition, type_token)
+        selector = Selector(str(operand1), type_token)
+        try:
+            value = self._value(condition.operand2, strategy, type_token)
+        except KeyError as e:
+            return
+        if condition.operator == "=":
             strategy.set_eq(selector, value)
-        elif condition.is_neq:
+        elif condition.operator == "!=":
             strategy.set_neq(selector, value)
-        elif condition.is_lt:
+        elif condition.operator == "<":
             strategy.set_lt(selector, value)
-        elif condition.is_lte:
+        elif condition.operator == "<=":
             strategy.set_lte(selector, value)
-        elif condition.is_gt:
+        elif condition.operator == ">":
             strategy.set_gt(selector, value)
-        elif condition.is_gte:
+        elif condition.operator == ">=":
             strategy.set_gte(selector, value)
-        elif condition.is_in:
-            if condition.value.is_range:
-                if condition.value.exclude_lower:
+        elif condition.operator == "in":
+            if condition.operand2.is_range:
+                if condition.operand2.exclude_min:
                     strategy.set_gt(selector, value[0])
                 else:
                     strategy.set_gte(selector, value[0])
-                if condition.value.exclude_upper:
+                if condition.operand2.exclude_max:
                     strategy.set_lt(selector, value[1])
                 else:
                     strategy.set_lte(selector, value[1])
             else:
                 strategy.set_in(selector, value)
-        elif condition.is_not_in:
-            if condition.value.is_range:
-                strategy.set_not_in_range(selector, value[0], value[1],
-                    exclude_min=condition.value.exclude_lower,
-                    exclude_max=condition.value.exclude_upper)
-            else:
-                strategy.set_not_in(selector, value)
 
-    def _set_len_condition(self, strategy, condition, type_token):
-        selector = Selector(condition.field.token, type_token)
-        value = self._value(condition.value, strategy)
-        if condition.is_eq:
-            strategy.set_attr_eq(selector, value, "length")
-        elif condition.is_neq:
-            strategy.set_attr_neq(selector, value, "length")
-        elif condition.is_lt:
-            strategy.set_attr_lt(selector, value, "length")
-        elif condition.is_lte:
-            strategy.set_attr_lte(selector, value, "length")
-        elif condition.is_gt:
-            strategy.set_attr_gt(selector, value, "length")
-        elif condition.is_gte:
-            strategy.set_attr_gte(selector, value, "length")
-        elif condition.is_in:
-            if condition.value.is_range:
-                if condition.value.exclude_lower:
-                    strategy.set_attr_gt(selector, value[0], "length")
+    def _set_attr_condition(self, strategy, condition, type_token):
+        operand1 = condition.operand1
+        assert operand1.is_function_call and operand1.function == "len"
+        attr = operand1.function
+        selector = Selector(str(operand1.arguments[0]), type_token)
+        try:
+            value = self._value(condition.operand2, strategy, type_token)
+        except KeyError as e:
+            return
+        if condition.operator == "=":
+            strategy.set_attr_eq(selector, value, attr=attr)
+        elif condition.operator == "!=":
+            strategy.set_attr_neq(selector, value, attr=attr)
+        elif condition.operator == "<":
+            strategy.set_attr_lt(selector, value, attr=attr)
+        elif condition.operator == "<=":
+            strategy.set_attr_lte(selector, value, attr=attr)
+        elif condition.operator == ">":
+            strategy.set_attr_gt(selector, value, attr=attr)
+        elif condition.operator == ">=":
+            strategy.set_attr_gte(selector, value, attr=attr)
+        elif condition.operator == "in":
+            if condition.operand2.is_range:
+                if condition.operand2.exclude_min:
+                    strategy.set_attr_gt(selector, value[0], attr=attr)
                 else:
-                    strategy.set_attr_gte(selector, value[0], "length")
-                if condition.value.exclude_upper:
-                    strategy.set_attr_lt(selector, value[1], "length")
+                    strategy.set_attr_gte(selector, value[0], attr=attr)
+                if condition.operand2.exclude_max:
+                    strategy.set_attr_lt(selector, value[1], attr=attr)
                 else:
-                    strategy.set_attr_lte(selector, value[1], "length")
+                    strategy.set_attr_lte(selector, value[1], attr=attr)
             else:
-                strategy.set_attr_in(selector, value, "length")
-        elif condition.is_not_in:
-            if condition.value.is_range:
-                strategy.set_attr_not_in_range(selector, value[0], value[1],
-                    "length", exclude_min=condition.value.exclude_lower,
-                    exclude_max=condition.value.exclude_upper)
-            else:
-                strategy.set_attr_not_in(selector, value, "length")
+                assert False
+                # strategy.set_in(selector, value)
 
-    def _value(self, hpl_value, strategy):
-        if hpl_value.is_reference:
-            type_token = self.types_by_message[hpl_value.message]
+    def _value(self, expr, strategy, type_token):
+        if expr.is_accessor:
+            msg = expr.base_message()
+            if not msg.is_this_msg:
+                assert msg.is_variable
+                type_token = self.types_by_message[msg.name]
             # check for constants
-            if len(hpl_value.parts) == 1:
-                ros_literal = type_token.constants.get(hpl_value.token)
+            if expr.is_field and expr.message.is_value:
+                ros_literal = type_token.constants.get(expr.field)
                 if ros_literal is not None:
                     return ros_literal.value
-            selector = Selector(hpl_value.token, type_token)
-            if hpl_value.message is None:
+            # It's hammer time!
+            str_expr = str(expr)
+            if str_expr.startswith("@"):
+                str_expr = str_expr.split(".", 1)[-1]
+            selector = Selector(str_expr, type_token)
+            if msg.is_this_msg:
                 return selector
-            return strategy.make_msg_arg(hpl_value.message, selector)
-        if hpl_value.is_literal:
-            return hpl_value.value
-        if hpl_value.is_range:
-            return (self._value(hpl_value.lower_bound, strategy),
-                    self._value(hpl_value.upper_bound, strategy))
-        if hpl_value.is_set:
-            return tuple(self._value(v, strategy) for v in hpl_value.values)
-        raise TypeError("unknown value type: " + type(hpl_value).__name__)
+            return strategy.make_msg_arg(msg.name, selector)
+        n = False
+        while not expr.is_value and expr.is_operator and expr.operator == "-":
+            n = not n
+            expr = expr.operand
+        assert expr.is_value, repr(expr)
+        if expr.is_literal:
+            if n:
+                return -expr.value
+            else:
+                return expr.value
+        if expr.is_range:
+            return (self._value(expr.min_value, strategy, type_token),
+                    self._value(expr.max_value, strategy, type_token))
+        if expr.is_set:
+            return tuple(self._value(v, strategy, type_token)
+                         for v in expr.values)
+        raise StrategyError("unknown value type: " + repr(expr))
+
+"""
+>>> from z3 import *
+>>> x, y = BitVecs('msg.field @i', 32)
+>>> s = Optimize()
+>>> s.add(x + y == 10)
+>>> s.add(UGT(x, 0x7FFFFFFF))
+>>> mx = s.minimize(x)
+>>> s.check()
+sat
+>>> s.model()
+[@i = 2147483658, msg.field = 2147483648]
+>>> s.model()[x].as_signed_long()
+-2147483648
+
+>>> s = Optimize()
+>>> s.add(x + y == 10)
+>>> s.add(ULE(x, 0x7FFFFFFF))
+>>> mx = s.maximize(x)
+>>> s.check()
+sat
+>>> s.model()[x].as_signed_long()
+2147483647
+>>> s.model()
+[@i = 2147483659, msg.field = 2147483647]
+
+32-bit float: x = FP('x', FPSort(8, 24))
+64-bit float: x = FP('x', FPSort(11, 53))
+"""
+
+
+"""
+>>> from sympy import Symbol, solve
+>>> x = Symbol('x')
+>>> r = solve(x**2 - 1, x)
+>>> r
+[-1, 1]
+>>> type(r[0])
+<class 'sympy.core.numbers.NegativeOne'>
+>>> r = solve(x - 4, x)
+>>> r = solve(x > 3, x)
+>>> r
+(3 < x) & (x < oo)
+>>> type(r)
+And
+>>> r.is_number
+False
+>>> r.is_Boolean
+True
+>>> bool(r)
+True
+>>> r.args
+(3 < x, x < oo)
+>>> from sympy import Not, Eq
+>>> solve(Not(Eq(x, 4)), x)
+(x > -oo) & (x < oo) & Ne(x, 4)
+>>> r = solve(Not(Eq(x, 4)), x)
+>>> r.args
+(x > -oo, x < oo, Ne(x, 4))
+>>> r.is_number
+False
+>>> r.is_Boolean
+True
+>>> from sympy import Or
+>>> r = solve(Or(x > 4, x < -4), x)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/home/andre/ros/harosenv/local/lib/python2.7/site-packages/sympy/solvers/solvers.py", line 1174, in solve
+    solution = _solve(f[0], *symbols, **flags)
+  File "/home/andre/ros/harosenv/local/lib/python2.7/site-packages/sympy/solvers/solvers.py", line 1511, in _solve
+    f_num, sol = solve_linear(f, symbols=symbols)
+  File "/home/andre/ros/harosenv/local/lib/python2.7/site-packages/sympy/solvers/solvers.py", line 2085, in solve_linear
+    eq = lhs - rhs
+TypeError: unsupported operand type(s) for -: 'Or' and 'int'
+>>> Or(solve(x > 4, x), solve(x < -4, x))
+((-oo < x) & (x < -4)) | ((4 < x) & (x < oo))
+>>> _
+((-oo < x) & (x < -4)) | ((4 < x) & (x < oo))
+>>> _.args
+((-oo < x) & (x < -4), (4 < x) & (x < oo))
+>>> r = solve([x * 2 + 3 > 15, x >= -128, x < 128], x)
+>>> r
+(6 < x) & (x < 128)
+"""
+
+
+class Stage1Builder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + (
+        "topics", "strategies", "activator")
+
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(Stage1Builder, self).__init__(
+            default_strategies, pkg_imports, type_map)
+        self.topics = topics
+
+    def build(self, prop):
+        self.strategies = {}
+        self.activator = None
+        event = prop.scope.activator
+        if event is None:
+            return # activator is launch; this stage does not exist
+        self._build_activator(event)
+        self._build_randoms(event)
+
+    def _build_activator(self, event):
+        topic = event.topic
+        if topic not in self.topics:
+            raise StrategyError("cannot publish on topic '{}'".format(topic))
+        rostype, assumed = self.topics.get(topic)
+        phi = event.predicate.join(assumed)
+        self.activator = self._build(
+            rostype, phi, topic=topic, alias=event.alias, fun_name="s1cs")
+
+    def _build_randoms(self, event):
+        for topic, data in self.topics.items():
+            rostype, assumed = data
+            if topic == event.topic: # activator topic
+                phi = event.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else:
+                    # cannot match activator
+                    phi = phi.negate().join(assumed)
+                    self._try_build(topic, rostype, phi, "s1cs")
+            else: # random topic
+                if assumed.is_vacuous and not assumed.is_true:
+                    continue # no random messages
+                self.strategies[topic] = self._build(
+                    rostype, assumed, topic=topic, fun_name="s1cs")
+
+
+class Stage2Builder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + (
+        "topics", "strategies", "trigger")
+
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(Stage2Builder, self).__init__(
+            default_strategies, pkg_imports, type_map)
+        self.topics = topics
+
+    def build(self, prop):
+        self.strategies = {}
+        self.trigger = None
+        trigger = prop.pattern.trigger
+        terminator = prop.scope.terminator
+        if prop.pattern.behaviour.topic in self.topics:
+            raise StrategyError("topic '{}' is not advertised".format(
+                prop.pattern.behaviour.topic))
+        activator = prop.scope.activator
+        if activator is not None and activator.alias is not None:
+            rostype, assumed = self.topics.get(activator.topic)
+            self.types_by_message[activator.alias] = rostype
+        if (prop.pattern.is_requirement
+                or prop.pattern.is_response or prop.pattern.is_prevention):
+            assert trigger is not None
+            self._build_trigger(trigger, terminator)
+        #self._build_randoms(None, terminator)
+        # it seems that we want to avoid random triggers after all
+        self._build_randoms(trigger, terminator)
+
+    def _build_trigger(self, trigger, terminator):
+        topic = trigger.topic
+        if topic not in self.topics:
+            raise StrategyError("cannot publish on topic '{}'".format(topic))
+        rostype, assumed = self.topics.get(topic)
+        phi = trigger.predicate.join(assumed)
+        if terminator is not None and terminator.topic == topic:
+            if terminator.predicate.is_vacuous:
+                raise StrategyError("trigger and terminator on the same topic")
+            phi = phi.join(terminator.predicate.negate())
+        self.trigger = self._build(
+            rostype, phi, topic=topic, alias=trigger.alias, fun_name="s2cs")
+
+    def _build_randoms(self, trigger, terminator):
+        for topic, data in self.topics.items():
+            rostype, assumed = data
+            if trigger and topic == trigger.topic:
+                phi = trigger.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match trigger or terminator
+                    phi = phi.negate()
+                    if terminator and topic == terminator.topic:
+                        psi = terminator.predicate
+                        if psi.is_vacuous:
+                            # TODO warning? trigger is impossible
+                            continue # no random messages
+                        else:
+                            phi = phi.join(psi.negate())
+                    phi = phi.join(assumed)
+                    self._try_build(topic, rostype, phi, "s2cs")
+            elif terminator and topic == terminator.topic:
+                phi = terminator.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match terminator
+                    phi = phi.negate().join(assumed)
+                    self._try_build(topic, rostype, phi, "s2cs")
+            else: # random topic
+                if assumed.is_vacuous and not assumed.is_true:
+                    continue # no random messages
+                self.strategies[topic] = self._build(
+                    rostype, assumed, topic=topic, fun_name="s2cs")
+
+
+class Stage3Builder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + ("topics", "strategies")
+
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(Stage3Builder, self).__init__(
+            default_strategies, pkg_imports, type_map)
+        self.topics = topics
+
+    def build(self, prop):
+        self.strategies = {}
+        #if not (prop.pattern.is_response or prop.pattern.is_prevention):
+        #    return # other patterns do not have this stage
+        self._build_randoms(prop.pattern.trigger, prop.scope.terminator)
+
+    def _build_randoms(self, trigger, terminator):
+        for topic, data in self.topics.items():
+            rostype, assumed = data
+            if trigger and topic == trigger.topic:
+                phi = trigger.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match trigger or terminator
+                    phi = phi.negate()
+                    if terminator and topic == terminator.topic:
+                        psi = terminator.predicate
+                        if psi.is_vacuous:
+                            continue # no random messages
+                        else:
+                            phi = phi.join(psi.negate())
+                    phi = phi.join(assumed)
+                    self._try_build(topic, rostype, phi, "s3cs")
+            elif terminator and topic == terminator.topic:
+                phi = terminator.predicate
+                if phi.is_vacuous:
+                    continue # no random messages
+                else: # cannot match terminator
+                    phi = phi.negate().join(assumed)
+                    self._try_build(topic, rostype, phi, "s3cs")
+            else: # random topic
+                if assumed.is_vacuous and not assumed.is_true:
+                    continue # no random messages
+                self.strategies[topic] = self._build(
+                    rostype, assumed, topic=topic, fun_name="s3cs")
+
+
+class TerminatorBuilder(StrategyBuilder):
+    __slots__ = StrategyBuilder.__slots__ + ("topics", "terminator")
+
+    def __init__(self, topics, default_strategies, pkg_imports, type_map):
+        super(TerminatorBuilder, self).__init__(
+            default_strategies, pkg_imports, type_map)
+        self.topics = topics
+        self.terminator = None
+
+    def build(self, prop):
+        self.terminator = None
+        if prop.scope.terminator is not None:
+            self._build_terminator(prop.scope.terminator)
+
+    def _build_terminator(self, terminator):
+        assert terminator is not None
+        topic = terminator.topic
+        rostype, assumed = self.topics[topic]
+        phi = terminator.predicate
+        if phi.is_vacuous:
+            phi = assumed
+        else:
+            phi = phi.join(assumed)
+        self.terminator = self._build(
+            rostype, phi, topic=topic, fun_name="tcs")

@@ -57,11 +57,9 @@ def all_except(array, exclude):
         if i not in exclude:
             yield array[i]
 
-{% import 'specs.python.jinja' as specs %}
-
 
 ################################################################################
-# Event Listeners
+# Runtime Verification Base Classes
 ################################################################################
 
 class EventListener(object):
@@ -117,15 +115,6 @@ class EventListener(object):
         return (0, self.update(time)) # (forks, timed_out)
 
 
-{% for event in events %}
-{{ specs.Listener(event) }}
-
-{% endfor %}
-
-################################################################################
-# Property Monitors
-################################################################################
-
 class PropertyMonitor(object):
     __slots__ = ("lock", "active", "trigger_count", "success", "failure",
                  "on_success", "on_failure", "is_liveness", "is_safety",
@@ -160,9 +149,14 @@ class PropertyMonitor(object):
     def update(self, time):
         raise NotImplementedError("subclasses must override this method")
 
+
+################################################################################
+# Property Monitors
+################################################################################
+
 {% for monitor in monitors %}
 
-{{ specs.Monitor(monitor, slack=slack, debug=true) }}
+{{ monitor }}
 
 {% endfor %}
 

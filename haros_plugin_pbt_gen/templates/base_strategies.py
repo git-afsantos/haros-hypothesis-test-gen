@@ -111,14 +111,3 @@ def ros_duration(draw):
     nsecs = draw(strategies.integers(min_value=-2147483648,
                                      max_value=2147483647))
     return rospy.Duration(secs, nsecs)
-
-@strategies.composite
-def ros_std_msgs_Header(draw, msg=None):
-    msg = msg or std_msgs.Header()
-    msg.stamp = draw(ros_time())
-    msg.frame_id = draw(ros_string())
-    assume(msg.stamp.secs <= 4294967295)
-    assume(msg.stamp.nsecs <= 4294967295)
-    return msg
-
-std_msgs_Header = ros_std_msgs_Header

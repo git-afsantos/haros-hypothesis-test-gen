@@ -51,6 +51,10 @@ ArrayFieldGenerator:
 # Imports
 ###############################################################################
 
+from builtins import map
+from builtins import str
+from past.builtins import basestring
+from builtins import object
 from builtins import range # Python 2 and 3: forward-compatible
 
 from .hypothesis_ast import (
@@ -391,6 +395,12 @@ class FieldGenerator(object):
             self.strategy = _EqualTo(self._ready_ref, value)
 
     def neq(self, value):
+        if self.strategy.is_enum:
+            if value in self.strategy.values:
+                self.strategy.values.remove(value)
+            if len(self.strategy.values) <= 0:
+                raise ContradictionError("{} != {}".format(
+                    self.expression, value))
         self.assumptions.append(_Assumption(self._init_ref, value, "!="))
 
     def lt(self, value):
@@ -428,10 +438,24 @@ class FieldGenerator(object):
     def in_set(self, values):
         if self.strategy.is_enum:
             common = set(self.strategy.values) & set(values)
-            assert len(common) > 0
+            for assumption in self.assumptions:
+                if assumption.operator == "!=":
+                    if assumption.value in common:
+                        common.remove(assumption.value)
+            if len(common) <= 0:
+                raise ContradictionError("{} in {}".format(
+                    self.expression, values))
             self.strategy = _SampledFrom(self._ready_ref, common)
         elif not self.strategy.is_constant:
-            self.strategy = _SampledFrom(self._ready_ref, values)
+            new_values = list(values)
+            for assumption in self.assumptions:
+                if assumption.operator == "!=":
+                    if assumption.value in new_values:
+                        new_values.remove(assumption.value)
+            if len(new_values) <= 0:
+                raise ContradictionError("{} in {}".format(
+                    self.expression, values))
+            self.strategy = _SampledFrom(self._ready_ref, new_values)
 
     def not_in(self, values):
         for value in values:
@@ -496,7 +520,7 @@ class CompositeFieldGenerator(FieldGenerator):
         for assumption in self.assumptions:
             if assumption.build_number != build_number:
                 return self.INITIALIZED
-        for field in self.fields.itervalues():
+        for field in self.fields.values():
             if field.state(build_number) != self.FINALIZED:
                 return self.INITIALIZED
         return self.FINALIZED
@@ -562,7 +586,7 @@ class RootFieldGenerator(FieldGenerator):
         return False
 
     def state(self, build_number):
-        for field in self.fields.itervalues():
+        for field in self.fields.values():
             if field.state(build_number) != self.FINALIZED:
                 return self.INITIALIZED
         return self.FINALIZED
@@ -617,7 +641,7 @@ class ArrayFieldGenerator(FieldGenerator):
     __slots__ = FieldGenerator.__slots__ + ("set_length", "min_length",
         "max_length", "neq_length", "by_default", "fields")
 
-    _ATTRS = ("length",)
+    _ATTRS = ("len",)
 
     _UNK_ATTR = "unknown array attribute: '{}'"
 
@@ -646,7 +670,7 @@ class ArrayFieldGenerator(FieldGenerator):
                 return self.INITIALIZED
         if self.by_default.state(build_number) != self.FINALIZED:
             return self.INITIALIZED
-        for field in self.fields.itervalues():
+        for field in self.fields.values():
             if field.state(build_number) != self.FINALIZED:
                 return self.INITIALIZED
         return self.FINALIZED
@@ -662,7 +686,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def eq(self, value, attr=None):
         if attr is None:
             return FieldGenerator.eq(self, value)
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.set_length is None:
@@ -689,7 +713,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def neq(self, value, attr=None):
         if attr is None:
             return FieldGenerator.neq(self, value)
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.set_length == n:
@@ -705,7 +729,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def lt(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError("<")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if n == 0:
@@ -725,7 +749,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def lte(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError("<=")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.min_length is not None and self.min_length > n:
@@ -742,7 +766,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def gt(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError(">")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.max_length is not None and self.max_length <= n:
@@ -759,7 +783,7 @@ class ArrayFieldGenerator(FieldGenerator):
     def gte(self, value, attr=None):
         if attr not in self._ATTRS:
             raise InvalidFieldOperatorError(">=")
-        if attr == "length":
+        if attr == "len":
             assert isinstance(value, _LiteralWrapper)
             n = value.value
             if self.max_length is not None and self.max_length < n:
@@ -779,7 +803,7 @@ class ArrayFieldGenerator(FieldGenerator):
         # and a buffer generator must be created, so that all constraints are
         # saved to apply later on new concrete fields.
         # FIXME: assuming only "for all" now.
-        fields = list(gen for key, gen in self.fields.iteritems()
+        fields = list(gen for key, gen in self.fields.items()
                        if accessor.matches(key))
         fields.append(self.by_default)
         return MultiGeneratorView(tuple(fields))
@@ -1018,6 +1042,7 @@ class _Statement(object):
         if loops:
             if statement.is_assignment:
                 statement.field = statement.field.replace("#", "i")
+                statement.expression = statement.expression.replace("#", "i")
             elif statement.is_assumption:
                 for condition in statement.conditions:
                     condition.field = condition.field.replace("#", "i")
@@ -1283,7 +1308,10 @@ class _SampledFrom(_Strategy):
                 and all(value.available(build_number) for value in self.values))
 
     def build(self):
-        value = RandomSample(map(str, self.values))
+        if len(self.values) > 1:
+            value = RandomSample(list(map(str, self.values)))
+        else:
+            value = str(self.values[0])
         statement = Assignment(self.field.field.expression, value)
         return self._enclosing_loops(statement)
 
@@ -1312,8 +1340,11 @@ class _SampledFrom(_Strategy):
         return False
 
     def _template(self):
-        return "strategies.sampled_from(({},))".format(
-            ", ".join(str(value) for value in self.values))
+        if len(self.values) > 1:
+            return "strategies.sampled_from(({},))".format(
+                ", ".join(str(value) for value in self.values))
+        else:
+            return "strategies.just({})".format(self.values[0])
 
 
 ################################################################################
@@ -1452,7 +1483,12 @@ class _LiteralWrapper(_ValueWrapper):
         return hash(self.value)
 
     def __str__(self):
-        return repr(self.value)
+        s = str(self.value)
+        if isinstance(self.value, basestring):
+            if s.startswith(('"', "'")):
+                return s
+            return '"{}"'.format(s)
+        return s
 
 
 ################################################################################
@@ -1574,5 +1610,5 @@ class _LoopContext(object):
         for array in self.arrays:
             expr = array.expression.replace("#", var)
             loop_var = var + str(len(loops) + 1)
-            loops.append((loop_var, expr, array.fields.keys()))
+            loops.append((loop_var, expr, list(array.fields.keys())))
         return loops
