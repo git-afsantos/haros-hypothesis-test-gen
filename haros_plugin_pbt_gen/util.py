@@ -25,6 +25,7 @@
 # Imports
 ###############################################################################
 
+from builtins import str
 from collections import namedtuple
 
 from haros.hpl.hpl_ast import (

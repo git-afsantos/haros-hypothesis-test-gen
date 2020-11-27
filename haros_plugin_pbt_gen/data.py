@@ -51,6 +51,10 @@ ArrayFieldGenerator:
 # Imports
 ###############################################################################
 
+from builtins import map
+from builtins import str
+from past.builtins import basestring
+from builtins import object
 from builtins import range # Python 2 and 3: forward-compatible
 
 from .hypothesis_ast import (
@@ -516,7 +520,7 @@ class CompositeFieldGenerator(FieldGenerator):
         for assumption in self.assumptions:
             if assumption.build_number != build_number:
                 return self.INITIALIZED
-        for field in self.fields.itervalues():
+        for field in self.fields.values():
             if field.state(build_number) != self.FINALIZED:
                 return self.INITIALIZED
         return self.FINALIZED
@@ -582,7 +586,7 @@ class RootFieldGenerator(FieldGenerator):
         return False
 
     def state(self, build_number):
-        for field in self.fields.itervalues():
+        for field in self.fields.values():
             if field.state(build_number) != self.FINALIZED:
                 return self.INITIALIZED
         return self.FINALIZED
@@ -666,7 +670,7 @@ class ArrayFieldGenerator(FieldGenerator):
                 return self.INITIALIZED
         if self.by_default.state(build_number) != self.FINALIZED:
             return self.INITIALIZED
-        for field in self.fields.itervalues():
+        for field in self.fields.values():
             if field.state(build_number) != self.FINALIZED:
                 return self.INITIALIZED
         return self.FINALIZED
@@ -799,7 +803,7 @@ class ArrayFieldGenerator(FieldGenerator):
         # and a buffer generator must be created, so that all constraints are
         # saved to apply later on new concrete fields.
         # FIXME: assuming only "for all" now.
-        fields = list(gen for key, gen in self.fields.iteritems()
+        fields = list(gen for key, gen in self.fields.items()
                        if accessor.matches(key))
         fields.append(self.by_default)
         return MultiGeneratorView(tuple(fields))
@@ -1305,7 +1309,7 @@ class _SampledFrom(_Strategy):
 
     def build(self):
         if len(self.values) > 1:
-            value = RandomSample(map(str, self.values))
+            value = RandomSample(list(map(str, self.values)))
         else:
             value = str(self.values[0])
         statement = Assignment(self.field.field.expression, value)
@@ -1606,5 +1610,5 @@ class _LoopContext(object):
         for array in self.arrays:
             expr = array.expression.replace("#", var)
             loop_var = var + str(len(loops) + 1)
-            loops.append((loop_var, expr, array.fields.keys()))
+            loops.append((loop_var, expr, list(array.fields.keys())))
         return loops

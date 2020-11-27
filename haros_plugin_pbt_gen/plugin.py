@@ -25,6 +25,8 @@
 # Imports
 ###############################################################################
 
+from builtins import str
+from builtins import object
 from builtins import range # Python 2 and 3: forward-compatible
 from collections import namedtuple
 from itertools import chain as iterchain
@@ -281,7 +283,7 @@ class TestGenerator(object):
             try:
                 strategies = self.strategies.build_strategies(p)
                 data = {
-                    "type_tokens": self.strategies.default_strategies.values(),
+                    "type_tokens": list(self.strategies.default_strategies.values()),
                     "random_headers": self.settings.get("random_headers", True),
                 }
                 py_default_msgs = self._render_template(

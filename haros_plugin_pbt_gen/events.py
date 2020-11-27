@@ -24,6 +24,8 @@
 # Imports
 ################################################################################
 
+from builtins import str
+from builtins import object
 from builtins import range # Python 2 and 3: forward-compatible
 from collections import namedtuple
 
@@ -467,7 +469,7 @@ class MonitorTemplate(object):
             source.ref_count += 1
             logged = s and b and source.is_trigger and not self.is_prevention
             token = str(value).split(".", 1)[-1]
-            for j, field_ref in source.saved_vars.iteritems():
+            for j, field_ref in source.saved_vars.items():
                 if field_ref == token:
                     var = _VariableSubstitution(j, ext=logged)
                     break
@@ -501,7 +503,7 @@ class MonitorTemplate(object):
                 source.ref_count += 1
                 logged = logged or (s and b and source.is_trigger and not self.is_prevention)
                 token = str(value).split(".", 1)[-1]
-                for j, field_ref in source.saved_vars.iteritems():
+                for j, field_ref in source.saved_vars.items():
                     if field_ref == token:
                         var = _VariableSubstitution(j, ext=logged)
                         break
@@ -539,7 +541,7 @@ class MonitorTemplate(object):
                 source.ref_count += 1
                 logged = logged or (s and b and source.is_trigger and not self.is_prevention)
                 token = str(value).split(".", 1)[-1]
-                for j, field_ref in source.saved_vars.iteritems():
+                for j, field_ref in source.saved_vars.items():
                     if field_ref == token:
                         var = _VariableSubstitution(j, ext=logged)
                         break

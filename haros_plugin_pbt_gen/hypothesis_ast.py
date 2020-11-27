@@ -25,6 +25,8 @@
 # Statement Classes
 ################################################################################
 
+from builtins import str
+from builtins import object
 class Statement(object):
     __slots__ = ()
 
