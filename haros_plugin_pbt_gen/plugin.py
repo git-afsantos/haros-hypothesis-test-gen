@@ -578,7 +578,8 @@ class StrategyManager(object):
         if prop.scope.activator is None:
             assert self.stage1.activator is None
         else:
-            assert self.stage1.activator is not None
+            # if prop.scope.activator.topic in publishers: assert
+            pass #assert self.stage1.activator is not None
         if prop.scope.terminator is None:
             assert self.terminator.terminator is None
         else:
@@ -917,7 +918,9 @@ class Stage1Builder(StrategyBuilder):
     def _build_activator(self, event):
         topic = event.topic
         if topic not in self.topics:
-            raise StrategyError("cannot publish on topic '{}'".format(topic))
+            # raise StrategyError("cannot publish on topic '{}'".format(topic))
+            # no longer an error; passive activator
+            return
         rostype, assumed = self.topics.get(topic)
         phi = event.predicate.join(assumed)
         self.activator = self._build(

@@ -54,6 +54,8 @@ msg_{{ p.strategy.alias }} = msg[0]
 {% endif %}
 chunks[-1].messages.append(msg)
 chunks[-1].set_clock = True
+for _chunk in chunks:
+    _chunk.req_not_scope = True
 {%- endmacro %}
 
 
@@ -77,6 +79,7 @@ if all_msgs:
 {% endif %}
 msg = (draw({{ strategy }}({{ args }})), "{{ q.strategy.topic }}")
 chunk.messages.append(msg)
+chunk.req_scope = True
 {%- endmacro %}
 
 
@@ -116,6 +119,7 @@ for chunk in new_chunks:
     chunk.delay = draw(delays)
     chunk.set_clock = True
     chunk.contains_trigger = True
+    chunk.req_scope = True
     {% if a.spam %}
 {{ _gen_spam(a.spam) }}
 if all_msgs:
@@ -134,6 +138,7 @@ if triggers:
         chunk.relative_delay = True
         chunk.delay = draw(delays)
         chunk.set_clock = True
+        chunk.req_scope = True
     {% if a.spam %}
 {{ _gen_spam(a.spam)|indent(width=4, first=true) }}
     if all_msgs:

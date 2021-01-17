@@ -123,6 +123,14 @@ def _test_hypothesis_properties(self, trace, hz):
         self.trace_start_time = get_time()
         for rep in range(trace.repetitions):
             for chunk in trace:
+                if chunk.req_scope:
+                    while not self.main_monitor.active:
+                        self._update()
+                        rate.sleep()
+                if chunk.req_not_scope:
+                    while self.main_monitor.active:
+                        self._update()
+                        rate.sleep()
                 if chunk.delay > 0.0:
                     if chunk.relative_delay:
                         while (get_time() - self.clock) < chunk.delay:

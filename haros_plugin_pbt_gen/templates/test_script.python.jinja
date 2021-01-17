@@ -229,6 +229,7 @@ class Trace(object):
 
 class Chunk(object):
     __slots__ = ("messages", "delay", "relative_delay", "set_clock",
+                 "req_scope", "req_not_scope",
                  "contains_trigger", "_trace_time", "_delta_time")
 
     def __init__(self, msgs=None, delay=0.0, relative=False, clock=False):
@@ -238,6 +239,8 @@ class Chunk(object):
         self.relative_delay = relative
         self.set_clock = clock
         self.contains_trigger = False
+        self.req_scope = False
+        self.req_not_scope = False
         self._trace_time = 0.0
         self._delta_time = 0.0
 
