@@ -583,7 +583,8 @@ class StrategyManager(object):
         if prop.scope.terminator is None:
             assert self.terminator.terminator is None
         else:
-            assert self.terminator.terminator is not None
+            # if prop.scope.terminator.topic in publishers:
+            #   assert self.terminator.terminator is not None
             if prop.scope.activator is not None:
                 t1 = prop.scope.activator.topic
                 t2 = prop.scope.terminator.topic
@@ -1080,6 +1081,8 @@ class TerminatorBuilder(StrategyBuilder):
     def _build_terminator(self, terminator):
         assert terminator is not None
         topic = terminator.topic
+        if topic not in self.topics:
+            return # previously an error
         rostype, assumed = self.topics[topic]
         phi = terminator.predicate
         if phi.is_vacuous:
