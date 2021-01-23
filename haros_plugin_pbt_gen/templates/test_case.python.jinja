@@ -61,6 +61,14 @@ def _setup_test(self):
 
 {% macro _setup_sut(commands, settings) %}
 def _setup_sut(self):
+    self.launch_time = get_time()
+    self.clock = self.launch_time
+    self.deadline = self.launch_time + {# defaults to 15 seconds -#}
+        {{ settings['deadline']|d(15, true) }}
+    for monitor in self.monitors:
+        monitor.on_launch(self.launch_time)
+    for monitor in self.axioms:
+        monitor.on_launch(self.launch_time)
     with HiddenPrints():
     {% for cmd in commands %}
         {# uuid = rospy.get_param("/run_id") #}
@@ -87,14 +95,6 @@ def _setup_sut(self):
         {% endif %}
     self.launches.append(launch)
     {% endfor %}
-    self.launch_time = get_time()
-    self.clock = self.launch_time
-    self.deadline = self.launch_time + {# defaults to 15 seconds -#}
-        {{ settings['deadline']|d(15, true) }}
-    for monitor in self.monitors:
-        monitor.on_launch(self.launch_time)
-    for monitor in self.axioms:
-        monitor.on_launch(self.launch_time)
     self._wait_for_nodes()
     self._wait_for_interfaces()
 {% endmacro %}
