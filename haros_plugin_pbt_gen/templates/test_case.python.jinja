@@ -121,20 +121,36 @@ def _test_hypothesis_properties(self, trace, hz):
     try:
         self._update()
         self.trace_start_time = get_time()
+        mon = self.main_monitor
         for rep in range(trace.repetitions):
+            if mon.n_scopes < rep:
+                raise BuggyTestError.missing_terminator()
+            while mon.active and mon.n_scopes == rep:
+                self._update()
+                rate.sleep()
             for chunk in trace:
                 if chunk.req_scope:
-                    while not self.main_monitor.active:
-                        self._update()
-                        rate.sleep()
-                if chunk.req_not_scope:
-                    while self.main_monitor.active:
-                        self._update()
-                        rate.sleep()
+                    if mon.n_scopes == rep:
+                        while not mon.active:
+                            self._update()
+                            rate.sleep()
+                    else:
+                        if not mon.active: # already terminated
+                            continue
+                elif chunk.req_not_scope:
+                    if mon.active:
+                        if not mon.n_scopes > rep:
+                            raise BuggyTestError.missing_terminator()
+                        continue
                 if chunk.delay > 0.0:
                     if chunk.relative_delay:
                         while (get_time() - self.clock) < chunk.delay:
                             self._update()
+                {% if is_liveness %}
+                            # FIXME: `at_least_once` in Response
+                            if mon.at_least_once and mon.trigger_count == trace.n_triggers:
+                                break
+                {% endif %}
                             rate.sleep()
                     else:
                         rospy.sleep(chunk.delay)
@@ -142,10 +158,11 @@ def _test_hypothesis_properties(self, trace, hz):
                     rate.sleep()
                 self._update()
                 {% if is_liveness %}
-                if self.main_monitor.at_least_once:
-                    passed = True
-                    print "[Example #{}]: OK".format(self.n_examples)
-                    return
+                if mon.at_least_once and mon.trigger_count == trace.n_triggers:
+                    if not trace.repetitions - rep > 1:
+                        passed = True
+                        print "[Example #{}]: OK".format(self.n_examples)
+                        return
                 {% endif %}
                 for msg, topic in chunk.messages:
                     self.pubs[topic].publish(msg)

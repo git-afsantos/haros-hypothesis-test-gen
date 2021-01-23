@@ -41,21 +41,30 @@ else:
 chunks.append(Chunk())
 {% endif %}
 # ----- Activator -------------------------------------
-{% if p.strategy.is_default %}
-    {% set strategy = msgs.strategy_name(p.strategy.pkg, p.strategy.msg) %}
-    {% set args = '' %}
+{% if p.strategy.name == '_' %}
+for _chunk in chunks:
+    _chunk.req_not_scope = True
+# Activator is sent by the SUT.
+chunks.append(Chunk())
+chunks[-1].req_scope = True
+chunks[-1].set_clock = True
 {% else %}
-    {% set strategy = p.strategy.name %}
-    {% set args = p.strategy.args|join(', ') %}
-{% endif %}
+    {% if p.strategy.is_default %}
+        {% set strategy = msgs.strategy_name(p.strategy.pkg, p.strategy.msg) %}
+        {% set args = '' %}
+    {% else %}
+        {% set strategy = p.strategy.name %}
+        {% set args = p.strategy.args|join(', ') %}
+    {% endif %}
 msg = (draw({{ strategy }}({{ args }})), "{{ p.strategy.topic }}")
-{% if p.strategy.alias %}
+    {% if p.strategy.alias %}
 msg_{{ p.strategy.alias }} = msg[0]
-{% endif %}
+    {% endif %}
 chunks[-1].messages.append(msg)
 chunks[-1].set_clock = True
 for _chunk in chunks:
     _chunk.req_not_scope = True
+{% endif %}
 {%- endmacro %}
 
 
@@ -70,16 +79,23 @@ if all_msgs:
 # There are no strategies for random messages.
 {% endif %}
 # ----- Terminator ------------------------------------
-{% if q.strategy.is_default %}
-    {% set strategy = msgs.strategy_name(q.strategy.pkg, q.strategy.msg) %}
-    {% set args = '' %}
+{% if q.strategy.name == '_' %}
+chunk.req_scope = True
+# Terminator is sent by the SUT.
+chunks.append(Chunk())
+chunks[-1].req_not_scope = True
 {% else %}
-    {% set strategy = q.strategy.name %}
-    {% set args = q.strategy.args|join(', ') %}
-{% endif %}
+    {% if q.strategy.is_default %}
+        {% set strategy = msgs.strategy_name(q.strategy.pkg, q.strategy.msg) %}
+        {% set args = '' %}
+    {% else %}
+        {% set strategy = q.strategy.name %}
+        {% set args = q.strategy.args|join(', ') %}
+    {% endif %}
 msg = (draw({{ strategy }}({{ args }})), "{{ q.strategy.topic }}")
 chunk.messages.append(msg)
 chunk.req_scope = True
+{% endif %}
 {%- endmacro %}
 
 

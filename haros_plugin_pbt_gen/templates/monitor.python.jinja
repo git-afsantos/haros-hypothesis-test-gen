@@ -344,6 +344,7 @@ def _on_cb{{ i }}(self, msg, time=None):
 def on_launch(self, time):
     {% if monitor.activator is none %}
     self.active = True
+    self.n_scopes += 1
     self.scope_max_time = time + {{ monitor.scope_timeout }}
     self.slack_max_time = time + {{ slack }}
         {% if monitor.terminator %}
@@ -373,6 +374,7 @@ def on_launch(self, time):
 def on_launch(self, time):
     {% if monitor.activator is none %}
     self.active = True
+    self.n_scopes += 1
     self.scope_max_time = time + {{ monitor.scope_timeout }}
         {% if monitor.terminator %}
             {% for event in monitor.terminator.roots %}
@@ -514,6 +516,7 @@ class {{ monitor.class_name }}(PropertyMonitor):
 
     def _activate(self, time):
         self.active = True
+        self.n_scopes += 1
         self.scope_max_time = time + {{ monitor.scope_timeout }}
         {% if monitor.is_safety %}
         self.slack_max_time = time + {{ slack }}

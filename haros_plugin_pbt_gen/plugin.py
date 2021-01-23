@@ -122,6 +122,8 @@ MsgStrategy = namedtuple("MsgStrategy",
     ("name", "args", "pkg", "msg", "statements", "is_default",
      "topic", "alias"))
 
+PASSIVE = MsgStrategy("_", (), "std_msgs", "Header", (), True, "_", None)
+
 
 class SpecError(Exception):
     pass
@@ -579,7 +581,7 @@ class StrategyManager(object):
             assert self.stage1.activator is None
         else:
             # if prop.scope.activator.topic in publishers: assert
-            pass #assert self.stage1.activator is not None
+            assert self.stage1.activator is not None
         if prop.scope.terminator is None:
             assert self.terminator.terminator is None
         else:
@@ -921,6 +923,7 @@ class Stage1Builder(StrategyBuilder):
         if topic not in self.topics:
             # raise StrategyError("cannot publish on topic '{}'".format(topic))
             # no longer an error; passive activator
+            self.activator = PASSIVE
             return
         rostype, assumed = self.topics.get(topic)
         phi = event.predicate.join(assumed)

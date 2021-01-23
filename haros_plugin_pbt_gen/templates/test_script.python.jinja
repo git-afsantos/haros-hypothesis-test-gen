@@ -345,11 +345,12 @@ class EventListener(object):
 class PropertyMonitor(object):
     __slots__ = ("lock", "active", "trigger_count", "success", "failure",
                  "on_success", "on_failure", "is_liveness", "is_safety",
-                 "scope_max_time", "slack_max_time")
+                 "scope_max_time", "slack_max_time", "n_scopes")
 
     def __init__(self, success_action=None, failure_action=None):
         self.lock = Lock()
         self.active = False
+        self.n_scopes = 0
         self.trigger_count = 0
         self.success = 0
         self.failure = 0
