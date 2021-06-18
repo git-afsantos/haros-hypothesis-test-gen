@@ -29,8 +29,8 @@ from builtins import object
 from builtins import range # Python 2 and 3: forward-compatible
 from collections import namedtuple
 
-from haros.hpl.hpl_ast import (
-    HplEvent, HplValue #HplEventChain, HplChainDisjunction
+from hpl.ast import (
+    HplSimpleEvent, HplValue #HplEventChain, HplChainDisjunction
 )
 
 from .util import convert_to_old_format, fake_set, fake_range, replace_base_msg
@@ -108,11 +108,11 @@ class EventTemplate(object):
 
     @property
     def is_publish(self):
-        return self.event_type == HplEvent.PUBLISH
+        return self.event_type == HplSimpleEvent.PUBLISH
 
     @property
     def is_receive(self):
-        return self.event_type == HplEvent.PUBLISH and self.is_external
+        return self.event_type == HplSimpleEvent.PUBLISH and self.is_external
 
     @property
     def var_count(self):

@@ -25,15 +25,14 @@
 # Imports
 ###############################################################################
 
-from builtins import str
-from builtins import object
-from builtins import range # Python 2 and 3: forward-compatible
+from builtins import object, range, str
 from collections import namedtuple
 from itertools import chain as iterchain
 import os
 
-from haros.hpl.hpl_ast import HplVacuousTruth
-from haros.hpl.ros_types import get_type # FIXME
+from hpl.ast import HplVacuousTruth
+from hplrv.rendering import TemplateRenderer
+from rostypes.loader import get_type
 from jinja2 import Environment, PackageLoader
 
 from .events import MonitorTemplate
@@ -255,6 +254,7 @@ class TestGenerator(object):
     def _make_monitors(self, hpl_properties):
         axioms = []
         monitors = []
+        tr = TemplateRenderer()
         for i in range(len(hpl_properties)):
             p = hpl_properties[i]
             uid = "P" + str(i + 1)
@@ -269,13 +269,7 @@ class TestGenerator(object):
             else:
                 self._apply_slack(monitor)
                 monitors.append(monitor)
-            data = {
-                "monitor": monitor,
-                "slack": self.settings.get("slack", 0.0),
-                "debug": self.settings.get("debug", False),
-            }
-            monitor.python = self._render_template(
-                "monitor.python.jinja", data, strip=True)
+            monitor.python = tr.render_monitor(p, class_name=monitor.class_name)
         return monitors, axioms
 
     def _make_test_templates(self, monitors, axioms):
