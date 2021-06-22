@@ -1,3 +1,5 @@
+{# SPDX-License-Identifier: MIT #}
+{# Copyright © 2021 André Santos #}
 
 {##############################################################################
  # Test Case Macros
@@ -13,15 +15,13 @@ def setUp(self):
     self.launches = []
     self.monitors = []
     self.axioms = []
-    self.msg_log = []
     self.subs = {}
     {% for sub in subscribers %}
         {% if sub.fake %}
-    self.subs["{{ sub.topic }}"] = FakeTestSubscriber({# -#}
-        "{{ sub.topic }}", self)
+    self.subs["{{ sub.topic }}"] = FakeTestSubscriber("{{ sub.topic }}")
         {% else %}
     self.subs["{{ sub.topic }}"] = TestSubscriber("{{ sub.topic }}", {# -#}
-        {{ sub.type_token.type_name.replace("/", ".") }}, self)
+        {{ sub.type_token.type_name.replace("/", ".") }})
         {% endif %}
     {% endfor %}
     self.pubs = {}
@@ -38,24 +38,43 @@ def setUp(self):
     self.clock = 0
 {% endmacro %}
 
-{% macro _setup_test(main_monitor, monitor_classes, axiom_classes) %}
+{% macro _setup_test(main_monitor, monitors, axioms) %}
 def _setup_test(self):
-    self.msg_log = []
     self.launch_time = 0
     self.clock = 0
     self.deadline = 0
     self.monitors = []
-    {% for class_name in monitor_classes %}
-    self.monitors.append({{ class_name }}(self.subs))
+    {% for monitor in monitors %}
+    m = {{ monitor.class_name }}()
+    self.monitors.append(m)
+        {% if monitor.class_name == main_monitor %}
+    self.main_monitor = m
+    m.on_enter_scope = self._on_enter_scope
+    m.on_exit_scope = self._on_exit_scope
+    m.on_success = self._on_early_success
+        {% endif %}
+    m.on_violation = partial(self._on_property_violation, m, False)
+        {% for event in monitor.events %}
+    self.subs["{{ event.topic }}"].add(m.on_msg_{{ event.topic.replace('/', '_')}})
+        {% endfor %}
     {% endfor %}
-    self.main_monitor = self.monitors[{{ monitor_classes.index(main_monitor) }}]
     self.axioms = []
-    {% for class_name in axiom_classes %}
-    self.axioms.append({{ class_name }}(self.subs))
+    {% for monitor in axioms %}
+    m = {{ monitor.class_name }}()
+    self.axioms.append(m)
+    m.on_violation = partial(self._on_property_violation, m, True)
+        {% for event in monitor.events %}
+    self.subs["{{ event.topic }}"].add(m.on_msg_{{ event.topic.replace('/', '_')}})
+        {% endfor %}
     {% endfor %}
     self.launches = []
     self.trace_done = False
     self.assumptions_ok = True
+    self.witness = None
+    self.pub_log = []
+    self.n_scopes = 0
+    self.monitor_active = False
+    self.fail_time = None
 {% endmacro %}
 
 
@@ -112,7 +131,7 @@ def _test_hypothesis_properties(self, trace, hz):
     passed = False
     self.n_examples += 1
     self._setup_test()
-    print "[Example #{}]: Launching SUT...".format(self.n_examples)
+    print("[Example #{}]: Launching SUT...".format(self.n_examples))
     self._setup_sut()
     self.trace_done = False
     rate = rospy.Rate(hz)
@@ -123,60 +142,53 @@ def _test_hypothesis_properties(self, trace, hz):
         self.trace_start_time = get_time()
         mon = self.main_monitor
         for rep in range(trace.repetitions):
-            if mon.n_scopes < rep:
+            if self.n_scopes < rep:
                 raise BuggyTestError.missing_terminator()
-            while mon.active and mon.n_scopes == rep:
+            while self.monitor_active and self.n_scopes == rep:
                 self._update()
                 rate.sleep()
             for chunk in trace:
                 if chunk.req_scope:
-                    if mon.n_scopes == rep:
-                        while not mon.active:
+                    if self.n_scopes == rep:
+                        while not self.monitor_active:
                             self._update()
                             rate.sleep()
                     else:
-                        if not mon.active: # already terminated
+                        if not self.monitor_active: # already terminated
                             continue
                 elif chunk.req_not_scope:
-                    if mon.active:
-                        if not mon.n_scopes > rep:
+                    if self.monitor_active:
+                        if not self.n_scopes > rep:
                             raise BuggyTestError.missing_terminator()
                         continue
                 if chunk.delay > 0.0:
                     if chunk.relative_delay:
                         while (get_time() - self.clock) < chunk.delay:
                             self._update()
-                {% if is_liveness %}
-                            # FIXME: `at_least_once` in Response
-                            if mon.at_least_once and mon.trigger_count == trace.n_triggers:
-                                break
-                {% endif %}
                             rate.sleep()
                     else:
                         rospy.sleep(chunk.delay)
                 else:
                     rate.sleep()
                 self._update()
-                {% if is_liveness %}
-                if mon.at_least_once and mon.trigger_count == trace.n_triggers:
-                    if not trace.repetitions - rep > 1:
-                        passed = True
-                        print "[Example #{}]: OK".format(self.n_examples)
-                        return
-                {% endif %}
+                pub_time = get_time()
                 for msg, topic in chunk.messages:
-                    self.pubs[topic].publish(msg)
+                    self.pubs[topic].publish(msg, time=pub_time)
+                    self.pub_log.append(MsgRecord(topic, pub_time, msg))
                 if chunk.set_clock:
                     self.clock = get_time()
         self.trace_done = True
         self._check_status()
         self._update()
-        assumptions_ok = True
-        self._check_outcome(trace)
+        assert mon.verdict is not False, mon.HPL_PROPERTY
+        # self._check_outcome(trace)
         passed = True
-        print "[Example #{}]: OK".format(self.n_examples)
+        print("[Example #{}]: OK".format(self.n_examples))
     except AssertionError as e:
         raise e
+    except EarlySuccess:
+        passed = True
+        print("[Example #{}]: OK".format(self.n_examples))
     finally:
         self.times.append(get_time() - self.launch_time)
         if self.assumptions_ok:
@@ -184,15 +196,17 @@ def _test_hypothesis_properties(self, trace, hz):
                 self.n_fail += 1
                 if self.first_fail is None:
                     self.first_fail = self.n_examples
-                print "[Example #{}]: FAIL".format(self.n_examples)
+                print("[Example #{}]: FAIL".format(self.n_examples))
         else:
             self.n_failed_assumptions += 1
-            print "[Example #{}]: INVALID".format(self.n_examples)
-        self._report_msg_log()
+            print("[Example #{}]: INVALID".format(self.n_examples))
+        if self.witness is not None:
+            self._report_witness()
         self._teardown_sut()
 {% endmacro %}
 
 
+{# FIXME old code, not yet reused #}
 {% macro _check_outcome(is_liveness) %}
 def _check_outcome(self, trace):
     now = get_time()
@@ -224,13 +238,13 @@ def _check_outcome(self, trace):
 {% endmacro %}
 
 
-{% macro _eval_trace(axiom_classes) %}
+{% macro _eval_trace(axioms) %}
 def _eval_trace(self, trace, hz):
-{% if axiom_classes %}
+{% if axioms %}
     self._time_analysis(trace, hz)
     try:
-    {% for class_name in axiom_classes %}
-        assume(eval_{{ class_name }}(trace))
+    {% for monitor in axioms %}
+        assume(eval_{{ monitor.class_name }}(trace))
     {% endfor %}
     except UnsatisfiedAssumption as e:
         self.assumptions_ok = False
@@ -241,25 +255,28 @@ def _eval_trace(self, trace, hz):
 {% endmacro %}
 
 
-{##############################################################################
- # Template Body
- ##############################################################################}
+{##############################################################################}
+{# RENDERED CODE #}
+{##############################################################################}
 
-{# Builds the main test case class, which contains the main logic of the test.
+{#
+    Builds the main test case class, which contains the main logic of the test.
     It is responsible for setting up and tearing down the SUT, building
     the various property monitors and replaying a random trace given by
-    hypothesis. #}
+    hypothesis.
+#}
 
-{# expects (main_monitor, monitor_classes, axiom_classes, publishers, subscribers, commands, nodes, settings, is_liveness) #}
+{#
+    expects:
+        main_monitor, monitors, axioms, publishers,
+        subscribers, commands, nodes, settings, is_liveness
+#}
+
+class EarlySuccess(Exception):
+    pass
 
 
 class TestTracer(unittest.TestCase):
-    __slots__ = ("launch_time", "deadline", "monitors", "main_monitor", "pubs",
-                 "launches", "trace_done", "trace_start_time", "msg_log",
-                 "n_examples", "n_fail", "times", "clock", "axioms",
-                 "first_fail", "counterexample_size", "assumptions_ok",
-                 "n_failed_assumptions")
-
     NODES = {{ nodes }}
 
 {{ _unittest_setup(publishers, subscribers)|indent(width=4, first=true) }}
@@ -288,21 +305,21 @@ class TestTracer(unittest.TestCase):
             if self.times:
                 s = sum(self.times)
                 avg = s / len(self.times)
-                print "Avg. test time:", avg
-                print "Total time:", s
-            print "Number of examples: {} ({} failures)".format(
-                self.n_examples, self.n_fail)
-            print "Number of failed assumptions: {}".format(
-                self.n_failed_assumptions)
+                print("Avg. test time:", avg)
+                print("Total time:", s)
+            print("Number of examples: {} ({} failures)".format(
+                self.n_examples, self.n_fail))
+            print("Number of failed assumptions: {}".format(
+                self.n_failed_assumptions))
             if self.first_fail is not None:
-                print "First failure at example #{} ({} shrink attempts)".format(
-                    self.first_fail, (self.n_examples - self.first_fail))
-                print "Counterexample trace size: {} messages".format(
-                    self.counterexample_size)
+                print("First failure at example #{} ({} shrink attempts)".format(
+                    self.first_fail, (self.n_examples - self.first_fail)))
+                print("Counterexample trace size: {} messages".format(
+                    self.counterexample_size))
 
 {{ _test_hypothesis(settings, is_liveness)|indent(width=4, first=true) }}
 
-{{ _eval_trace(axiom_classes)|indent(width=4, first=true) }}
+{{ _eval_trace(axioms)|indent(width=4, first=true) }}
 
     def _time_analysis(self, trace, hz):
         clock = 0.0
@@ -323,7 +340,7 @@ class TestTracer(unittest.TestCase):
             chunk._trace_time = clock
             chunk._delta_time = delta
 
-{{ _setup_test(main_monitor, monitor_classes, axiom_classes)|indent(width=4, first=true) }}
+{{ _setup_test(main_monitor, monitors, axioms)|indent(width=4, first=true) }}
 
 {{ _setup_sut(commands, settings)|indent(width=4, first=true) }}
 
@@ -352,17 +369,33 @@ class TestTracer(unittest.TestCase):
         if set_clock:
             self.clock = now
         for monitor in self.monitors:
-            monitor.update(now)
-            assert not monitor.has_failed, monitor.HPL_PROPERTY
-        try:
-            for monitor in self.axioms:
-                monitor.update(now)
-                assume(not monitor.has_failed)
-        except UnsatisfiedAssumption as e:
-            self.assumptions_ok = False
-            raise e
+            monitor.on_timer(now)
+        for monitor in self.axioms:
+            monitor.on_timer(now)
 
-{{ _check_outcome(is_liveness)|indent(width=4, first=true) }}
+{# {{ _check_outcome(is_liveness)|indent(width=4, first=true) }} #}
+
+    def _on_early_success(self, time, witness):
+        # called only for the main monitor
+        raise EarlySuccess()
+
+    def _on_property_violation(self, monitor, is_axiom, time, witness):
+        self.witness = witness
+        self.fail_time = time
+        if is_axiom:
+            self.assumptions_ok = False
+            assume(False)
+        else:
+            assert False, monitor.HPL_PROPERTY
+
+    def _on_enter_scope(self, time):
+        # called only for the main monitor
+        self.n_scopes += 1
+        self.monitor_active = True
+
+    def _on_exit_scope(self, time):
+        # called only for the main monitor
+        self.monitor_active = False
 
     def _wait_for_nodes(self, timeout=60.0, online=True):
         if online:
@@ -431,51 +464,60 @@ class TestTracer(unittest.TestCase):
             for sub in self.subs.values():
                 assert sub.ready, "Failed to find " + sub.resolved_name
 
-{#  def _report_trace(self, trace, hz):
-        if not trace.chunks:
-            print "Property failed; no messages were sent to the system."
-        else:
-            print "Property failed at {} hz for".format(hz)
-            for chunk in trace.chunks:
-                if chunk.delay > 0.0:
-                    print ">> Wait {} seconds".format(chunk.delay)
-                for msg, i in chunk.messages:
-                    print ">> Publish on {}".format(repr(
-                        self.pubs[i][0].resolved_name))
-                    print str(msg)
-#}
-    def log_msg(self, topic, msg, time, sent=False):
-        self.msg_log.append((topic, msg, time, sent))
-
-    def _report_msg_log(self):
+    def _report_witness(self):
         self.counterexample_size = 0
-        if not self.msg_log:
+        if not self.witness and not self.pub_log:
             note("No messages were sent or received.")
-        else:
-            p_topic = p_msg = None
-            t0 = self.msg_log[0][2]
-            for topic, msg, time, sent in self.msg_log:
-                age = time - t0
-                if age == 0:
-                    age = "@ 0s"
-                elif age > 0:
-                    if age < 1:
-                        age = "@ +{}ms".format(int(age * 1000))
-                    else:
-                        age = "@ +{}s".format(age)
+            return
+        # Build counterexample timeline ---------------------
+        ce = []
+        #   1. Published messages up until a failure was registered.
+        for record in self.pub_log:
+            if record.timestamp > self.fail_time:
+                break
+            ce.append((record, True, False))
+        self.counterexample_size = len(ce)
+        #   2. Witness messages placed in order.
+        i = 0
+        for record in self.witness:
+            if record.topic in self.pubs:
+                # published by the test; must be somewhere
+                while i < len(ce):
+                    rec2 = ce[i][0]
+                    i += 1
+                    if rec2.timestamp != record.timestamp:
+                        continue
+                    if rec2.topic != record.topic:
+                        continue
+                    if rec2.msg != record.msg:
+                        continue
+                    ce[i] = (rec2, True, True)
+                    break
                 else:
-                    if age > -1:
-                        age = "@ {}ms".format(int(age * 1000))
-                    else:
-                        age = "@ {}s".format(age)
-                if sent:
-                    note(">> {} sent on {}".format(age, topic))
-                    self.counterexample_size += 1
+                    raise BuggyTestError.bad_witness()
+            else:
+                # not published by the test; should not be there
+                while i < len(ce):
+                    rec2 = ce[i][0]
+                    if rec2.timestamp >= record.timestamp:
+                        ce.insert(i, (record, False, True))
+                        break
+                    i += 1
                 else:
-                    note("<< {} received on {}".format(age, topic))
-                if topic != p_topic or msg != p_msg:
-                    note(str(msg))
-                else:
-                    note("(same as above)")
-                p_topic = topic
-                p_msg = msg
+                    ce.append((record, False, True))
+                    i += 1
+        prev = None
+        for record, sent, witness in ce:
+            age = record.timestamp - self.launch_time
+            age = "@{:,}ms".format(int(age * 1000))
+            tag = "witness" if witness else "spam"
+            if sent:
+                note(">> {} sent {} on {}".format(age, tag, record.topic))
+            else:
+                note("<< {} received on {}".format(age, record.topic))
+            if not prev or record.topic != prev.topic or record.msg != prev.msg:
+                msg = str(record.msg) or "(empty msg)"
+                note(msg)
+            else:
+                note("(same as above)")
+            prev = record

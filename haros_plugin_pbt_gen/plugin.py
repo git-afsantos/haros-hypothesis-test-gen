@@ -296,8 +296,8 @@ class TestGenerator(object):
             subs = self._get_subscribers()
             data = {
                 "main_monitor": monitors[i].class_name,
-                "monitor_classes": [m.class_name for m in ms],
-                "axiom_classes": [m.class_name for m in axioms],
+                "monitors": ms,
+                "axioms": axioms,
                 "publishers": self._get_publishers(),
                 "subscribers": subs,
                 "commands": self.commands,
@@ -395,7 +395,7 @@ class TestGenerator(object):
             python = self._render_template(
                 "test_script.python.jinja", data, strip=False)
         with open(filename, "w") as f:
-            f.write(python)
+            f.write(python.lstrip())
         mode = os.stat(filename).st_mode
         mode |= (mode & 0o444) >> 2
         os.chmod(filename, mode)

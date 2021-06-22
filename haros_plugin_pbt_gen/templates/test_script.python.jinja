@@ -1,93 +1,30 @@
+{# SPDX-License-Identifier: MIT #}
+{# Copyright © 2021 André Santos #}
+
+{##############################################################################}
+{# RENDERED CODE #}
+{##############################################################################}
+
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-#Copyright (c) 2019 André Santos
-#
-#Permission is hereby granted, free of charge, to any person obtaining a copy
-#of this software and associated documentation files (the "Software"), to deal
-#in the Software without restriction, including without limitation the rights
-#to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-#copies of the Software, and to permit persons to whom the Software is
-#furnished to do so, subject to the following conditions:
+# SPDX-License-Identifier: MIT
+# Copyright © 2021 André Santos
 
-#The above copyright notice and this permission notice shall be included in
-#all copies or substantial portions of the Software.
-
-#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-#OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-#THE SOFTWARE.
-
-################################################################################
-# Notes
-################################################################################
-
-# ---- TEST CASE STRUCTURE (PROPERTY MONITOR) ----
-
-#        activator         terminator
-#            |                 |
-# launch     +-----------------+     timeout
-#   >--------| // behaviour // |--------<
-#   | ////// +-----------------+
-#   | ////// random msg ////// |
-#   +--------------------------+
-
-# Behaviour - Observable actions from the SUT (e.g. publish a message).
-#   - liveness: at least one observable action eventually matches the pattern.
-#   - safety: all observable actions (if any) match the pattern.
-
-# Activator - Event that marks the start of the monitoring interval.
-#   - launch: event that marks the start of the test case (default).
-
-# Terminator - Event that marks the end of the monitoring interval.
-#   - timeout: event that marks the timeout of the test case (default).
-
-
-# ---- TIMING ISSUES (FLAKY TESTS) ----
-
-# Due to the distributed and multithreaded nature of ROS, many systems will
-# be prone to non-determinism and behaviour that is dependent on the timing
-# of incoming messages.
-
-# For instance, consider a node that spins on one thread and publishes at a
-# fixed rate on another thread. Incoming messages are processed as soon as
-# possible, and the internal state is updated accordingly. But, since the
-# publishing thread only takes occasional snapshots of the internal state,
-# what ends up being published depends on what messages have been processed
-# before each tick.
-# Consider messages A and B that change the output message.
-# We have the following scenarios:
-
-#       Scenario 1
-# spin:            A    B
-# time:     >-o----o----o----o->
-# rate:    publish        publish
-
-#       Scenario 2
-# spin:       A         B
-# time:     >-o----o----o----o->
-# rate:         publish   publish
-
-# In Scenario 1 the second publish iteration will see all changes of the
-# internal state, and decide on the appropriate output.
-# In Scenario 2 message B is not processed in time, and the first publish
-# iteration will only consider A, while the second will consider both A and B.
-
-# When a test fails, repeating the trace might fall into the opposite scenario,
-# which might not break the property anymore, and thus lead to a flaky test.
-# This kind of bugs could probably be exploited with simulated time,
-# but it might be best to leave that as an optional feature, not the default.
-
-
-################################################################################
+###############################################################################
 # Imports
-################################################################################
+###############################################################################
 
-from builtins import range # Python 2 and 3: forward-compatible
-from collections import namedtuple
+from __future__ import print_function, unicode_literals
+from builtins import object, range, str
+from collections import deque, namedtuple
+from functools import partial
+from math import pi as PI
+from math import e as E
+from math import (
+    ceil, floor, log, log10, sqrt, acos, asin,
+    atan, atan2, cos, sin, tan, degrees, radians,
+)
 import os
 from threading import Lock
 from time import time as get_time
@@ -111,8 +48,8 @@ import {{ pkg_name }}.msg as {{ pkg_name }}
 # Constants
 ################################################################################
 
-inf = float("inf")
-nan = float("nan")
+INF = inf = float("inf")
+NAN = nan = float("nan")
 
 INT8_MIN_VALUE = -(2 ** 7)
 INT8_MAX_VALUE = (2 ** 7) - 1
@@ -145,6 +82,8 @@ FLOAT64_MAX_VALUE = 1.7E+308
 # Utility
 ################################################################################
 
+MsgRecord = namedtuple('MsgRecord', ('topic', 'timestamp', 'msg'))
+
 def do_nothing(time=None, msg=None):
     pass
 
@@ -157,6 +96,14 @@ def all_except(array, exclude):
     for i in range(len(array)):
         if i not in exclude:
             yield array[i]
+
+def prod(iterable):
+    x = 1
+    for y in iterable:
+        x = x * y
+        if x == 0:
+            return 0
+    return x
 
 
 class HiddenPrints(object):
@@ -268,122 +215,11 @@ def chunk_splits(draw, msgs):
 
 
 ################################################################################
-# Runtime Verification Base Classes
+# Runtime Verification Classes
 ################################################################################
-
-{# Even if a single EventListener class is reused multiple times in a chain,
- # we are going to create a different instance for each occurrence in the
- # chain, so it is safe to assume that an instance will be forked always
- # with the same delay and duration. This means that these values can be
- # passed to the constructor. #}
-{# We assume that a single instance of an EventListener will only have one
- # "path" that it can follow (and fork into), even if it forks multiple
- # listeners at once (e.g. disjunction), so this information can be stored. #}
-{# On further thought, we are going to the point of creating a subclass for
- # each occurrence of an event, even if it is the same event in theory.
- # This is because different occurrences of the same event might save
- # different variables to pass along to the next event. So, either:
- #  1. we store the next fork and which variables to set dynamically
- #     (with setattr() in a loop, potentially); or
- #  2. we hard-code each subclass, potentially increasing code duplication,
- #     but gaining some efficiency. #}
-class EventListenerInstance(object):
-    __slots__ = ("min_time", "max_time", "seq_start", "other_max_time",
-        "state", "matches", "subsumed")
-
-    def __init__(self, min_time, max_time, seq_start, state,
-                 other_max_time=inf):
-        self.min_time = min_time
-        self.max_time = max_time
-        self.seq_start = seq_start
-        self.other_max_time = other_max_time
-        self.state = state
-        self.matches = 0
-        self.subsumed = False
-
-
-class EventListener(object):
-    __slots__ = ("active",)
-
-    DELAY = 0.0
-    DURATION = inf
-
-    def __init__(self):
-        self.active = []
-
-    def add(self, time, state, seq_start, other_max_time):
-        self.active.append(EventListenerInstance(time + self.DELAY,
-            time + self.DURATION, seq_start, state,
-            other_max_time=other_max_time))
-
-    def update(self, time):
-        timed_out = 0
-        i = len(self.active) - 1
-        while i >= 0:
-            e = self.active[i]
-            if time >= e.max_time or time >= e.other_max_time:
-                del self.active[i]
-                timed_out += ((not e.subsumed and not e.matches) and 1) or 0
-            i -= 1
-        return timed_out
-
-    def reset(self):
-        timed_out = 0
-        for e in self.active:
-            timed_out += ((not e.subsumed and not e.matches) and 1) or 0
-        self.active = []
-        return timed_out
-
-    def subsume(self):
-        for e in self.active:
-            e.subsumed = True
-
-    def process(self, msg, time):
-        return (0, self.update(time)) # (forks, timed_out)
-
-
-class PropertyMonitor(object):
-    __slots__ = ("lock", "active", "trigger_count", "success", "failure",
-                 "on_success", "on_failure", "is_liveness", "is_safety",
-                 "scope_max_time", "slack_max_time", "n_scopes")
-
-    def __init__(self, success_action=None, failure_action=None):
-        self.lock = Lock()
-        self.active = False
-        self.n_scopes = 0
-        self.trigger_count = 0
-        self.success = 0
-        self.failure = 0
-        self.scope_max_time = inf
-        self.slack_max_time = inf
-        self.on_success = success_action or do_nothing
-        self.on_failure = failure_action or do_nothing
-
-    @property
-    def at_least_once(self):
-        return self.success > 0
-
-    @property
-    def has_failed(self):
-        return self.failure > 0
-
-    @property
-    def triggered(self):
-        return self.trigger_count > 0
-
-    def on_launch(self, time):
-        raise NotImplementedError("subclasses must override this method")
-
-    def update(self, time):
-        raise NotImplementedError("subclasses must override this method")
-
 
 EvalScope = namedtuple("EvalScope", ("chunks", "state",))
 
-
-################################################################################
-# Property Monitors
-################################################################################
 
 {% for monitor in monitors %}
 
@@ -396,6 +232,7 @@ EvalScope = namedtuple("EvalScope", ("chunks", "state",))
 {{ monitor }}
 
 {% endfor %}
+
 
 ################################################################################
 # Evaluation Functions
@@ -430,6 +267,10 @@ class BuggyTestError(Exception):
     def missing_trigger(cls):
         return cls("Trigger message was not observed.")
 
+    @classmethod
+    def bad_witness(cls):
+        return cls("Witness report does not match publication log.")
+
 
 class TestPublisher(SubscribeListener):
     __slots__ = ("pub", "subscriber")
@@ -450,26 +291,26 @@ class TestPublisher(SubscribeListener):
         return self.pub.resolved_name
 
     def peer_subscribe(self, topic_name, topic_publish, peer_publish):
-        print ">> SUBSCRIBED ON", topic_name
+        print(">> SUBSCRIBED ON", topic_name)
 
     def peer_unsubscribe(self, topic_name, num_peers):
-        print ">> UNSUBSCRIBED ON", topic_name
+        print(">> UNSUBSCRIBED ON", topic_name)
 
     def unregister(self):
         self.pub.unregister()
 
-    def publish(self, msg):
-        self.subscriber._cb(msg)
+    def publish(self, msg, time=None):
+        time = time if time is not None else get_time()
+        self.subscriber._cb(msg, time)
         self.pub.publish(msg)
 
 
 class FakeTestSubscriber(object):
-    __slots__ = ("topic", "callbacks", "msg_log")
+    __slots__ = ("topic", "callbacks",)
 
-    def __init__(self, topic, msg_log):
+    def __init__(self, topic):
         self.topic = topic
         self.callbacks = []
-        self.msg_log = msg_log
 
     @property
     def ready(self):
@@ -491,20 +332,17 @@ class FakeTestSubscriber(object):
     def add(self, cb):
         self.callbacks.append(cb)
 
-    def _cb(self, msg):
-        time = get_time()
-        self.msg_log.log_msg(self.topic, msg, time, sent=True)
+    def _cb(self, msg, time):
         for cb in self.callbacks:
-            cb(msg, time=time)
+            cb(msg, time)
 
 
 class TestSubscriber(object):
-    __slots__ = ("sub", "callbacks", "msg_log")
+    __slots__ = ("sub", "callbacks",)
 
-    def __init__(self, topic, msg_type, msg_log):
+    def __init__(self, topic, msg_type):
         self.sub = Subscriber(topic, msg_type, self._cb, queue_size=10)
         self.callbacks = []
-        self.msg_log = msg_log
 
     @property
     def ready(self):
@@ -530,9 +368,8 @@ class TestSubscriber(object):
 
     def _cb(self, msg):
         time = get_time()
-        self.msg_log.log_msg(self.sub.resolved_name, msg, time)
         for cb in self.callbacks:
-            cb(msg, time=time)
+            cb(msg, time)
 
 
 {{ test_case }}
