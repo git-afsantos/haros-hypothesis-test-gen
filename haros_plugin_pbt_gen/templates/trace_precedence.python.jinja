@@ -27,6 +27,8 @@ def traces(draw):
 {% else %}
 {% set ends_via_timeout = 'True' %}
     # Property scope is terminated at shutdown.
+    if chunks:
+        chunks[-1].set_clock = True
 {{ trace.gen_delay_chunk(b.timeout, 2 * b.timeout, relative_delay=true)|indent(width=4, first=true) }}
     chunk.req_scope = True
 {% endif %}
