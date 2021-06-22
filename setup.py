@@ -46,9 +46,9 @@ extra_files.append("haros_plugin_pbt_gen/plugin.yaml")
 
 setup(
     name = "haros_plugin_pbt_gen",
-    version = "0.2.0",
+    version = "0.3.0",
     author = "André Santos",
-    author_email = "andre.f.santos@inesctec.pt",
+    author_email = "contact.andre.santos@gmail.com",
     description = "HAROS plugin to generate Property-based tests.",
     #long_description = read("README.rst"),
     license = "MIT",
