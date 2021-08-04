@@ -491,7 +491,7 @@ class TestTracer(unittest.TestCase):
                         continue
                     if rec2.msg != record.msg:
                         continue
-                    ce[i] = (rec2, True, True)
+                    ce[i-1] = (rec2, True, True)
                     break
                 else:
                     raise BuggyTestError.bad_witness()
