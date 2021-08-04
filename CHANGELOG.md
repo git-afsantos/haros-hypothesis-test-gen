@@ -6,5 +6,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-## [0.1.0] - 2019-XX-XX
+## [0.3.1] - 2021-08-04
+### Fixed
+- Fixed a bug related to witness reporting.
+
+## [0.1.0] - 2019
 Initial release.
