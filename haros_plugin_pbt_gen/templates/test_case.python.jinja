@@ -173,8 +173,8 @@ def _test_hypothesis_properties(self, trace, hz):
                 self._update()
                 pub_time = get_time()
                 for msg, topic in chunk.messages:
-                    self.pubs[topic].publish(msg, time=pub_time)
                     self.pub_log.append(MsgRecord(topic, pub_time, msg))
+                    self.pubs[topic].publish(msg, time=pub_time)
                 if chunk.set_clock:
                     self.clock = get_time()
         self.trace_done = True
