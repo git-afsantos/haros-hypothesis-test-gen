@@ -35,20 +35,21 @@ def read(fname):
 def package_files(directory):
     paths = []
     for (path, directories, filenames) in os.walk(directory):
+        path = path.replace("haros_plugin_pbt_gen" + os.path.sep, "")
         for filename in filenames:
-            paths.append(os.path.join("..", path, filename))
+            paths.append(os.path.join(path, filename))
     return paths
 
 
 extra_files = package_files("haros_plugin_pbt_gen/templates")
-extra_files.append("haros_plugin_pbt_gen/plugin.yaml")
+extra_files.append("plugin.yaml")
 
 
 setup(
     name = "haros_plugin_pbt_gen",
-    version = "0.3.1",
+    version = "0.3.2",
     author = "André Santos",
-    author_email = "contact.andre.santos@gmail.com",
+    author_email = "haros.framework@gmail.com",
     description = "HAROS plugin to generate Property-based tests.",
     #long_description = read("README.rst"),
     license = "MIT",
@@ -64,5 +65,5 @@ setup(
         "hpl-specs",
         "hpl-rv-gen",
     ],
-    zip_safe = True
+    zip_safe = False
 )
