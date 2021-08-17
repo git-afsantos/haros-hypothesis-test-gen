@@ -29,6 +29,7 @@ import os
 from threading import Lock
 from time import time as get_time
 import unittest
+import warnings
 import sys
 
 from hypothesis import assume, given, HealthCheck, note, settings
@@ -381,6 +382,7 @@ class TestSubscriber(object):
 
 def main():
     # {{ property_text }}
+    warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
     rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
     unittest.main(module=__name__, argv=[__name__], exit=False)
     sys.stdout.flush()
