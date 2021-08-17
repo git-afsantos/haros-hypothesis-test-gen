@@ -394,7 +394,7 @@ class TestGenerator(object):
         else:
             python = self._render_template(
                 "test_script.python.jinja", data, strip=False)
-        with open(filename, "w") as f:
+        with open(filename, "wb") as f:
             f.write(python.lstrip())
         mode = os.stat(filename).st_mode
         mode |= (mode & 0o444) >> 2
