@@ -409,6 +409,7 @@ class TestTracer(unittest.TestCase):
             now = get_time()
         end = now + timeout
         pending = list(self.NODES)
+        warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
         with HiddenPrints():
             while now < end and pending and not rospy.is_shutdown():
                 node_name = pending.pop()
@@ -456,6 +457,7 @@ class TestTracer(unittest.TestCase):
 
     def _check_status(self):
         if not rospy.is_shutdown():
+            warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
             for node_name in self.NODES:
                 assert rosnode_ping(node_name, max_count=1), (
                     "Failed to find " + node_name)

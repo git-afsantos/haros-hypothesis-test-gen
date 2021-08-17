@@ -382,7 +382,6 @@ class TestSubscriber(object):
 
 def main():
     # {{ property_text }}
-    warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
     rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
     unittest.main(module=__name__, argv=[__name__], exit=False)
     sys.stdout.flush()
