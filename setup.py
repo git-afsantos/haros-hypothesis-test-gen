@@ -47,7 +47,7 @@ extra_files.append("plugin.yaml")
 
 setup(
     name = "haros_plugin_pbt_gen",
-    version = "0.3.4",
+    version = "0.3.5",
     author = "André Santos",
     author_email = "haros.framework@gmail.com",
     description = "HAROS plugin to generate Property-based tests.",
