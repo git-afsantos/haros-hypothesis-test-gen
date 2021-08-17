@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
-## v0.3.5 - 2021-08-17
+## v0.3.6 - 2021-08-17
 ### Fixed
 - Suppressed warnings about unused sockets; the issue lies in `rosnode.ping_node()` (see [ros/ros_comm#2176](https://github.com/ros/ros_comm/issues/2176)).
 
