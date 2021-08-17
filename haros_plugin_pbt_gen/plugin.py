@@ -27,6 +27,7 @@
 
 from builtins import object, range, str
 from collections import namedtuple
+import io
 from itertools import chain as iterchain
 import os
 
@@ -394,7 +395,7 @@ class TestGenerator(object):
         else:
             python = self._render_template(
                 "test_script.python.jinja", data, strip=False)
-        with open(filename, "wb") as f:
+        with io.open(filename, "w", encoding="utf-8") as f:
             f.write(python.lstrip())
         mode = os.stat(filename).st_mode
         mode |= (mode & 0o444) >> 2
@@ -426,7 +427,7 @@ class TestGenerator(object):
 
     def _render_template(self, filename, data, strip=True):
         template = self.jinja_env.get_template(filename)
-        text = template.render(**data).encode("utf-8")
+        text = template.render(**data)#.encode("utf-8")
         if strip:
             text = text.strip()
         return text
