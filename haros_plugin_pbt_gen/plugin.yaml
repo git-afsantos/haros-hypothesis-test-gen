@@ -20,7 +20,15 @@
 #THE SOFTWARE.
 ---
 name: haros_plugin_pbt_gen
-version: 0.1.0
+version: 0.4.0
 languages:
     - cpp
     - python
+rules:
+    pbtest:
+        name:           Property-based Test
+        scope:          file
+        description:    An automatic property-based test failed.
+        tags:
+            - testing
+            - pbt

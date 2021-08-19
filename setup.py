@@ -47,7 +47,7 @@ extra_files.append("plugin.yaml")
 
 setup(
     name = "haros_plugin_pbt_gen",
-    version = "0.3.6",
+    version = "0.4.0",
     author = "André Santos",
     author_email = "haros.framework@gmail.com",
     description = "HAROS plugin to generate Property-based tests.",
@@ -64,6 +64,7 @@ setup(
         "ros-type-tokens",
         "hpl-specs",
         "hpl-rv-gen",
+        "rospy",
     ],
     zip_safe = False
 )
