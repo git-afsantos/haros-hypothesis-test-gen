@@ -43,6 +43,7 @@ from .data import (
 )
 from .selectors import Selector
 from .util import StrategyError, convert_to_old_format
+from .test_runner import TestRunner
 
 
 ###############################################################################
@@ -73,35 +74,59 @@ def configuration_analysis(iface, config):
         config_num += 1
         gen = TestGenerator(iface, config, settings)
         gen.make_tests(config_num)
+        if settings["run_tests"]:
+            iface.log_debug("settings:run_tests is set to True")
+            runner = TestRunner(iface, config)
+            runner.start_roscore()
+            try:
+                runner.run_tests(gen.test_files)
+            except Exception as test_err:
+                iface.log_error("Error while running tests:\n" + str(test_err))
+            finally:
+                runner.shutdown_roscore()
     except SpecError as e:
         iface.log_error(e.message)
 
 
 def _validate_settings(iface, settings):
-    # TODO fill in the rest
     msg = "invalid setting for '{}': {}; expected one of {}; assuming {}"
-    val = settings.get("extra_monitors")
+    key = "extra_monitors"
+    val = settings.get(key)
     exp = (None, True, False, "safety")
     default = True
     if val not in exp:
-        iface.log_warning(msg.format(val, exp, default))
-        settings["extra_monitors"] = default
-    val = settings.get("deadline")
+        iface.log_warning(msg.format(key, val, exp, default))
+        settings[key] = default
+
+    key = "deadline"
+    val = settings.get(key)
     exp = (None, "float >= 0.0",)
     default = 10.0
     if val is None:
-        settings["deadline"] = default
+        settings[key] = default
     elif not isinstance(val, float) or val < 0.0:
-        iface.log_warning(msg.format(val, exp, default))
-        settings["deadline"] = default
-    val = settings.get("max_scopes")
+        iface.log_warning(msg.format(key, val, exp, default))
+        settings[key] = default
+
+    key = "max_scopes"
+    val = settings.get(key)
     exp = (None, "int >= 1",)
     default = 2
     if val is None:
-        settings["max_scopes"] = default
+        settings[key] = default
     elif not isinstance(val, int) or val < 1:
-        iface.log_warning(msg.format(val, exp, default))
-        settings["max_scopes"] = default
+        iface.log_warning(msg.format(key, val, exp, default))
+        settings[key] = default
+
+    key = "run_tests"
+    val = settings.get(key)
+    exp = (None, True, False)
+    default = False
+    if val is None:
+        settings[key] = default
+    elif val not in exp:
+        iface.log_warning(msg.format(key, val, exp, default))
+        settings[key] = default
 
 
 ################################################################################
@@ -155,8 +180,10 @@ class TestGenerator(object):
             autoescape=False
         )
         self.node_names = list(n.rosname.full for n in config.nodes.enabled)
+        self.test_files = []
 
     def make_tests(self, config_num):
+        self.test_files = []
         hpl_properties = self._filter_properties()
         monitors, axioms = self._make_monitors(hpl_properties)
         tests = self._make_test_templates(monitors, axioms)
@@ -164,6 +191,7 @@ class TestGenerator(object):
             testable = tests[i]
             filename = "c{:03d}_test_{}.py".format(config_num, i+1)
             self._write_test_files(tests[i], filename, axioms)
+            self.test_files.append(filename)
         if not tests:
             msg = "None of the given properties for {} is directly testable."
             msg = msg.format(self.config.name)
