@@ -120,7 +120,7 @@ def _setup_sut(self):
 
 
 {% macro _test_hypothesis(settings, is_liveness) %}
-@settings(max_examples={{ settings['max_examples']|d(1000, true) }}, {# -#}
+@settings(max_examples={{ settings['max_examples']|d(100, true) }}, {# -#}
             deadline=None,
           suppress_health_check=(HealthCheck.filter_too_much, HealthCheck.too_slow))
 @given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
@@ -409,7 +409,10 @@ class TestTracer(unittest.TestCase):
             now = get_time()
         end = now + timeout
         pending = list(self.NODES)
-        warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
+        try:
+            warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
+        except NameError:
+            pass # Python 2
         with HiddenPrints():
             while now < end and pending and not rospy.is_shutdown():
                 node_name = pending.pop()
@@ -457,7 +460,10 @@ class TestTracer(unittest.TestCase):
 
     def _check_status(self):
         if not rospy.is_shutdown():
-            warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
+            try:
+                warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
+            except NameError:
+                pass # Python 2
             for node_name in self.NODES:
                 assert rosnode_ping(node_name, max_count=1), (
                     "Failed to find " + node_name)
@@ -468,8 +474,10 @@ class TestTracer(unittest.TestCase):
 
     def _report_witness(self):
         self.counterexample_size = 0
+        note("### BEGIN COUNTEREXAMPLE ###")
         if not self.witness and not self.pub_log:
             note("No messages were sent or received.")
+            note("### END COUNTEREXAMPLE ###")
             return
         # Build counterexample timeline ---------------------
         ce = []
@@ -523,3 +531,4 @@ class TestTracer(unittest.TestCase):
             else:
                 note("(same as above)")
             prev = record
+        note("### END COUNTEREXAMPLE ###")
