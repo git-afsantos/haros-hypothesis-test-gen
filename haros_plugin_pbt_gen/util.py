@@ -21,7 +21,17 @@ from hpl.ast import (
 ###############################################################################
 
 class StrategyError(Exception):
-    pass
+    @classmethod
+    def unsat(cls, topic, ros_type):
+        if topic is None:
+            str_topic = ''
+        else:
+            str_topic = " for topic '{}'".format(topic)
+        if ros_type is None:
+            str_type = ''
+        else:
+            str_type = " ({}.msg)".format(ros_type.type_name)
+        raise cls('unsatisfiable predicate{}{}'.format(str_topic, str_type))
 
 
 FakeSet = namedtuple("HplSet", ("values", "is_set", "is_range"))
