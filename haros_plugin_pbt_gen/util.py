@@ -31,7 +31,7 @@ class StrategyError(Exception):
             str_type = ''
         else:
             str_type = " ({}.msg)".format(ros_type.type_name)
-        raise cls('unsatisfiable predicate{}{}'.format(str_topic, str_type))
+        return cls('unsatisfiable predicate{}{}'.format(str_topic, str_type))
 
 
 FakeSet = namedtuple("HplSet", ("values", "is_set", "is_range"))
