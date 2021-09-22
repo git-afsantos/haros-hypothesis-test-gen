@@ -13,7 +13,6 @@ from collections import namedtuple
 
 from hpl.ast import HplVacuousTruth
 
-# from .events import MonitorTemplate
 from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
     ContradictionError
@@ -27,6 +26,7 @@ from .util import StrategyError, convert_to_old_format
 ###############################################################################
 
 INF = float('inf')
+INT_INF = -1
 
 
 ################################################################################
@@ -52,9 +52,10 @@ TraceSegment = namedtuple('TraceSegment', (
 
 
 class TestSchemaBuilder(object):
-    __slots__ = ('segments',)
+    __slots__ = ('name', 'segments',)
 
-    def __init__(self):
+    def __init__(self, name='schema'):
+        self.name = name
         self.segments = [TraceSegmentBuilder(0, 1)]
 
     def publish_new(self, lower_bound, upper_bound, topic, predicate):
@@ -63,7 +64,7 @@ class TestSchemaBuilder(object):
         if not (upper_bound > lower_bound and upper_bound <= INF):
             raise ValueError('interval upper bound: ' + str(upper_bound))
         ts = int(lower_bound)
-        tf = -1 if upper_bound == INF else int(upper_bound)
+        tf = INT_INF if upper_bound == INF else int(upper_bound)
         self.segments.append(TraceSegmentBuilder(
             ts=ts, tf=tf, seq=len(self.segments)))
         return self.publish(topic, predicate)
@@ -74,15 +75,17 @@ class TestSchemaBuilder(object):
     def forbid(self, topic, predicate):
         self.segments[-1].forbid(topic, predicate)
 
-    def build(self, all_topics):
+    def build(self, all_topics, inf=INT_INF):
         # all_topics: {topic: (ros_type, assumption)}
         schema = []
-        for segment in self.segments:
+        for i in range(len(self.segments)):
+            segment = self.segments[i]
+            prefix = '{}_{}_'.format(self.name, i)
             schema.append(TraceSegment(
                 segment.lower_bound,
-                segment.upper_bound,
-                segment.strategies_for_published_events(all_topics),
-                segment.strategies_for_random_events(all_topics),
+                segment.upper_bound if segment.upper_bound > 0 else inf,
+                segment.event_strategies(all_topics, fun_name_prefix=prefix),
+                segment.spam_strategies(all_topics, fun_name_prefix=prefix),
                 segment.is_single_instant,
                 segment.is_bounded,
             ))
@@ -103,7 +106,7 @@ class TraceSegmentBuilder(object):
 
     MsgEvent = namedtuple('MsgEvent', ('topic', 'predicate', 'alias'))
 
-    def __init__(self, ts=0, tf=-1, seq=0):
+    def __init__(self, ts=0, tf=INT_INF, seq=0):
         assert ts >= 0, 'ts ({}) < 0'.format(ts)
         assert tf < 0 or tf > ts, 'tf ({}) <= ts ({})'.format(tf, ts)
         self.lower_bound = ts
@@ -136,7 +139,7 @@ class TraceSegmentBuilder(object):
     def forbid(self, topic, predicate):
         self.forbid_events.append(self.MsgEvent(topic, predicate, None))
 
-    def strategies_for_published_events(self, all_topics):
+    def event_strategies(self, all_topics, fun_name_prefix=''):
         # all_topics: {topic: (ros_type, assumption)}
         strategies = []
         for i in range(len(self.publish_events)):
@@ -144,12 +147,12 @@ class TraceSegmentBuilder(object):
             ros_type, assumed = all_topics[pe.topic]
             builder = MessageStrategyBuilder(pe.topic, ros_type)
             builder.assume(assumed)
-            fun_name = 'pub_{}_{}'.format(self.seq_number, i)
+            prefix = '{}pub{}'.format(fun_name_prefix, i)
             strategies.append(builder.build(predicate=pe.predicate,
-                alias=pe.alias, fun_name=fun_name))
+                alias=pe.alias, fun_name_prefix=prefix))
         return strategies
 
-    def strategies_for_random_events(self, all_topics):
+    def spam_strategies(self, all_topics, fun_name_prefix=''):
         # all_topics: {topic: (ros_type, assumption)}
         strategies = {}
         for topic, info in all_topics.items():
@@ -159,8 +162,8 @@ class TraceSegmentBuilder(object):
             for e in self.forbid_events:
                 if e.topic == topic:
                     builder.assume(e.predicate.negate())
-            fun_name = 'spam_' + str(self.seq_number)
-            strategies[topic] = builder.build(fun_name=fun_name)
+            prefix = fun_name_prefix + 'spam'
+            strategies[topic] = builder.build(fun_name_prefix=prefix)
         return strategies
 
     def __str__(self):
@@ -210,7 +213,7 @@ class MessageStrategyBuilder(object):
     def assume(self, predicate):
         self.predicate = self.predicate.join(assumption.predicate)
 
-    def build(self, predicate=None, alias=None, fun_name='cms'):
+    def build(self, predicate=None, alias=None, fun_name_prefix='cms'):
         phi = self.predicate
         if predicate is not None:
             phi = predicate.join(phi)
@@ -222,7 +225,7 @@ class MessageStrategyBuilder(object):
         # FIXME remove this and remake the strategy generator
         conditions = convert_to_old_format(phi.condition)
         strategy = self._msg_generator(self.ros_type, conditions)
-        name = '{}_{}_{}'.format(fun_name,
+        name = '{}_{}_{}'.format(fun_name_prefix,
             self.ros_type.package, self.ros_type.message)
         return MsgStrategy(name, strategy.args, self.ros_type.package,
             self.ros_type.message, strategy.build(), False, self.topic, alias)
