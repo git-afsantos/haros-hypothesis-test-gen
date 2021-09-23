@@ -44,50 +44,24 @@ def {{ strategy.name }}(draw):
  # Template Body
  ##############################################################################}
 
-{# Strategies = (p, q, a, b) #}
-{# p = (strategy, spam) #}
-{# q = (strategy, spam) #}
-{# a = (strategy, spam, min_num, max_num) #}
-{# b = (spam, timeout) #}
-{# MsgStrategy = ("name", "args", "pkg", "msg", "statements",
-                  "is_default", "topic", "alias") #}
+{# receives:
+    custom_msg_strategies: [MsgStrategy]
+#}
 
-{# assume: q.spam and b.spam are the same #}
+{# type MsgStrategy
+    name: string,
+    args: [string],
+    pkg: string,
+    msg: string,
+    statements: [hypothesis_ast.Statement],
+    is_default: bool,
+    topic: string,
+    alias: string
+#}
 
+{% for strategy in custom_msg_strategies %}
 
-{% if p.strategy %}
-    {% for strategy in p.spam %}
-        {% if not strategy.is_default %}
-{{ custom_msg(strategy) }}
-        {% endif %}
-    {% endfor %}
-    {% if not p.strategy.is_default %}
-
-{{ custom_msg(p.strategy) }}
-    {% endif %}
-{% endif %}
-
-{% if q.strategy %}
-    {% if not q.strategy.is_default %}
-
-{{ custom_msg(q.strategy) }}
-    {% endif %}
-{% endif %}
-
-{% for strategy in b.spam %}
     {% if not strategy.is_default %}
 {{ custom_msg(strategy) }}
     {% endif %}
 {% endfor %}
-
-{% if a.strategy %}
-    {% for strategy in a.spam %}
-        {% if not strategy.is_default %}
-{{ custom_msg(strategy) }}
-        {% endif %}
-    {% endfor %}
-    {% if not a.strategy.is_default %}
-
-{{ custom_msg(a.strategy) }}
-    {% endif %}
-{% endif %}

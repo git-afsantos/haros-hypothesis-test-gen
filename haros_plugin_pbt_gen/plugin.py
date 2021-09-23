@@ -291,7 +291,7 @@ class TestGenerator(object):
             try:
                 strategies = self.strategies.build_strategies(p)
                 data = {
-                    "type_tokens": list(self.strategies.default_strategies.values()),
+                    "type_tokens": strategies['default_strategies'],
                     "random_headers": self.settings.get("random_headers", True),
                 }
                 py_default_msgs = self._render_template(
@@ -299,7 +299,7 @@ class TestGenerator(object):
                     data, strip=True)
                 py_custom_msgs = self._render_template(
                     "custom_msg_strategies.python.jinja",
-                    strategies._asdict(), strip=True)
+                    strategies, strip=True)
             except StrategyError as e:
                 self.iface.log_warning(
                     "Cannot produce a test for:\n'{}'\n\n{}".format(p, e))
@@ -320,7 +320,7 @@ class TestGenerator(object):
             py_test_case = self._render_template(
                 "test_case.python.jinja", data, strip=True)
             py_monitors = [m.python for m in ms]
-            pkg_imports = self.strategies.pkg_imports
+            pkg_imports = set(self.strategies.pkg_imports)
             for sub in subs:
                 pkg_imports.add(sub.type_token.package)
             tests.append(TestTemplate(py_default_msgs, py_custom_msgs,
@@ -413,8 +413,7 @@ class TestGenerator(object):
         os.chmod(filename, mode)
         self.iface.export_file(filename)
 
-    def _render_trace_strategy(self, prop, strategies):
-        data = dict(strategies._asdict())
+    def _render_trace_strategy(self, prop, data):
         data["reps"] = 1
         if prop.scope.is_after_until:
             data["reps"] = self.settings.get("max_scopes", 2)
@@ -530,6 +529,21 @@ class StrategyManager(object):
         schemas = [b.build(self.open_topics) for b in builders]
         # schemas: [SchemaInfo]
         # SchemaInfo: (name, [TraceSegment], string)
+        default_strategies = set()
+        custom_msg_strategies = []
+        for schema in schemas:
+            for seg in schema.segments:
+                for strategy in iterchain(seg.published, seg.spam.values()):
+                    if strategy.is_default:
+                        ros_type, x = self.open_topics[strategy.topic]
+                        default_strategies.add(ros_type)
+                    else:
+                        custom_msg_strategies.append(strategy)
+        return {
+            'schemas': schemas,
+            'default_strategies': default_strategies,
+            'custom_msg_strategies': custom_msg_strategies,
+        }
 
     def _mapping_hpl_assumptions(self, assumptions):
         for event in assumptions:

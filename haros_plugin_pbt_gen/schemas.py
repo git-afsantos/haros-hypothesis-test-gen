@@ -30,6 +30,37 @@ INT_INF = -1
 
 
 ################################################################################
+# Data Structures
+################################################################################
+
+SchemaInfo = namedtuple('SchemaInfo', (
+    'name',     # string
+    'segments', # [TraceSegment]
+    'text',     # string
+))
+
+TraceSegment = namedtuple('TraceSegment', (
+    'lower_bound',  # int
+    'upper_bound',  # int
+    'published',    # [MsgStrategy]
+    'spam',         # {topic: MsgStrategy}
+    'is_single_instant', # bool
+    'is_bounded',   # bool
+))
+
+MsgStrategy = namedtuple('MsgStrategy', (
+    'name',         # string
+    'args',         # [string]
+    'pkg',          # string
+    'msg',          # string
+    'statements',   # [hypothesis_ast.Statement]
+    'is_default',   # bool
+    'topic',        # string
+    'alias',        # string
+))
+
+
+################################################################################
 # High-level Schema Builders
 ################################################################################
 
@@ -109,8 +140,6 @@ def _ensure_event(event, ts, tf, builders):
 class TestSchemaBuilder(object):
     __slots__ = ('name', 'segments',)
 
-    SchemaInfo = namedtuple('SchemaInfo', ('name', 'segments', 'text'))
-
     def __init__(self, name='schema'):
         self.name = name
         self.segments = [TraceSegmentBuilder(0, 1)]
@@ -137,7 +166,7 @@ class TestSchemaBuilder(object):
             prefix = '{}_{}_'.format(self.name, i)
             schema.append(self.segments[i].build(all_topics,
                 inf=inf, fun_name_prefix=prefix))
-        return self.SchemaInfo(self.name, schema, str(self))
+        return SchemaInfo(self.name, schema, str(self))
 
     def duplicate(self, name='schema'):
         other = TestSchemaBuilder(name=name)
@@ -158,15 +187,6 @@ class TraceSegmentBuilder(object):
     )
 
     MsgEvent = namedtuple('MsgEvent', ('topic', 'predicate', 'alias'))
-
-    TraceSegment = namedtuple('TraceSegment', (
-        'lower_bound',  # int
-        'upper_bound',  # int
-        'published',    # [MsgStrategy]
-        'spam',         # {topic: MsgStrategy}
-        'is_single_instant', # bool
-        'is_bounded'    # bool
-    ))
 
     def __init__(self, ts=0, tf=INT_INF):
         assert ts >= 0, 'ts ({}) < 0'.format(ts)
@@ -228,7 +248,7 @@ class TraceSegmentBuilder(object):
         return strategies
 
     def build(self, all_topics, inf=INT_INF, fun_name_prefix=''):
-        return self.TraceSegment(
+        return TraceSegment(
             self.lower_bound,
             self.upper_bound if self.is_bounded else inf,
             self.event_strategies(all_topics, fun_name_prefix=fun_name_prefix),
@@ -258,14 +278,6 @@ class TraceSegmentBuilder(object):
 ################################################################################
 # Strategy Building
 ################################################################################
-
-MsgStrategy = namedtuple('MsgStrategy',
-    ('name', 'args', 'pkg', 'msg', 'statements', 'is_default',
-     'topic', 'alias'))
-
-
-# FIXME: building indexes of pkg_imports and default_strategies was removed
-# from this class, in comparison with the original. It should be handled above.
 
 class MessageStrategyBuilder(object):
     __slots__ = ('topic', 'ros_type', 'predicate')
