@@ -521,7 +521,10 @@ class StrategyManager(object):
         self.deadline = deadline
 
     def build_strategies(self, prop):
-        pass # FIXME
+        # inf=INT_INF, unroll=0
+        schemas = schemas_for_property(prop, self.published_topics)
+        # schemas: [schema]
+        # schema: [TraceSegment]
 
     def _mapping_hpl_assumptions(self, assumptions):
         for event in assumptions:

@@ -30,26 +30,86 @@ INT_INF = -1
 
 
 ################################################################################
-# Schema Building
+# High-level Schema Builders
 ################################################################################
 
-StrategyP = namedtuple('P', ('strategy', 'spam'))
-StrategyQ = namedtuple('Q', ('strategy', 'spam', 'min_time'))
-StrategyA = namedtuple('A', ('strategy', 'spam', 'min_num', 'max_num'))
-StrategyB = namedtuple('B', ('spam', 'timeout'))
+def schemas_for_property(prop, all_topics, inf=INT_INF, unroll=0):
+    # all_topics: {topic: (ros_type, assumption predicate)}
+    # inf: int >= 0 (value to replace infinity with)
+    #      int < 0 (treat infinity as unbounded/max. int)
+    # unroll: int >= 0 (how deep to unroll schemas)
+    if unroll < 0:
+        raise ValueError('unroll ({!r}) should be int >= 0'.format(unroll))
+    schemas = _minimal_schemas(prop, all_topics, inf)
+    return schemas
 
-Strategies = namedtuple('Strategies', ('p', 'q', 'a', 'b'))
+
+# Could be multiple because of disjunctions, etc..
+# Looks like this:
+#          forbid activator
+#   +0..: publish activator
+def _minimal_schemas(prop, all_topics, inf):
+    builders = [TestSchemaBuilder(name='schema0')]
+    _avoid_event(prop.scope.activator, builders)
+    _ensure_event(prop.scope.activator, 0, INF, builders)
+    if prop.pattern.is_absence:
+        pass
+    elif prop.pattern.is_existence:
+        pass
+    elif prop.pattern.is_requirement:
+        pass
+    elif prop.pattern.is_response or prop.pattern.is_prevention:
+        _avoid_event(prop.pattern.trigger, builders)
+        _avoid_event(prop.scope.terminator, builders)
+        _ensure_event(prop.pattern.trigger, 0, INF, builders)
+    else:
+        assert False, str(prop.pattern)
+    for i in range(len(builders)):
+        builders[i] = builders[i].build(all_topics, inf=inf)
+    return builders
 
 
-TraceSegment = namedtuple('TraceSegment', (
-    'lower_bound',  # int
-    'upper_bound',  # int
-    'published',    # [MsgStrategy]
-    'spam',         # {topic: MsgStrategy}
-    'is_single_instant', # bool
-    'is_bounded'    # bool
-))
+def _avoid_event(event, builders):
+    if event is None:
+        return
+    if event.is_simple_event:
+        for builder in builders:
+            builder.forbid(event.topic, event.predicate)
+    elif event.is_event_disjunction:
+        for builder in builders:
+            for e in event.simple_events():
+                builder.forbid(e.topic, e.predicate)
+    else:
+        assert False, str(type(event))
 
+def _ensure_event(event, ts, tf, builders):
+    if event is None:
+        return
+    if event.is_simple_event:
+        for builder in builders:
+            builder.new_timestamp(ts, tf)
+            builder.publish(event.topic, event.predicate, alias=event.alias)
+    elif event.is_event_disjunction:
+        # disjunctions fork schemas
+        events = list(event.simple_events())
+        new_builders = []
+        for builder in builders:
+            builder.new_timestamp(ts, tf)
+            for i in range(1, len(events)):
+                e = events[i]
+                name = 'schema' + str(len(builders) + len(new_builders))
+                new_builders.append(builder.duplicate(name=name))
+                new_builders[-1].publish(e.topic, e.predicate, alias=e.alias)
+            e = events[0]
+            builder.publish(e.topic, e.predicate, alias=e.alias)
+        builders.extend(new_builders)
+    else:
+        assert False, str(type(event))
+
+
+################################################################################
+# Schema Building
+################################################################################
 
 class TestSchemaBuilder(object):
     __slots__ = ('name', 'segments',)
@@ -58,19 +118,17 @@ class TestSchemaBuilder(object):
         self.name = name
         self.segments = [TraceSegmentBuilder(0, 1)]
 
-    def publish_new(self, lower_bound, upper_bound, topic, predicate):
+    def new_timestamp(self, lower_bound, upper_bound):
         if not (lower_bound >= 0 and lower_bound < INF):
             raise ValueError('interval lower_bound: ' + str(lower_bound))
         if not (upper_bound > lower_bound and upper_bound <= INF):
             raise ValueError('interval upper bound: ' + str(upper_bound))
         ts = int(lower_bound)
         tf = INT_INF if upper_bound == INF else int(upper_bound)
-        self.segments.append(TraceSegmentBuilder(
-            ts=ts, tf=tf, seq=len(self.segments)))
-        return self.publish(topic, predicate)
+        self.segments.append(TraceSegmentBuilder(ts=ts, tf=tf))
 
-    def publish(self, topic, predicate):
-        self.segments[-1].publish(topic, predicate)
+    def publish(self, topic, predicate, alias=None):
+        self.segments[-1].publish(topic, predicate, alias=alias)
 
     def forbid(self, topic, predicate):
         self.segments[-1].forbid(topic, predicate)
@@ -79,20 +137,19 @@ class TestSchemaBuilder(object):
         # all_topics: {topic: (ros_type, assumption)}
         schema = []
         for i in range(len(self.segments)):
-            segment = self.segments[i]
             prefix = '{}_{}_'.format(self.name, i)
-            schema.append(TraceSegment(
-                segment.lower_bound,
-                segment.upper_bound if segment.upper_bound > 0 else inf,
-                segment.event_strategies(all_topics, fun_name_prefix=prefix),
-                segment.spam_strategies(all_topics, fun_name_prefix=prefix),
-                segment.is_single_instant,
-                segment.is_bounded,
-            ))
+            schema.append(self.segments[i].build(all_topics,
+                inf=inf, fun_name_prefix=prefix))
         return schema
 
+    def duplicate(self, name='schema'):
+        other = TestSchemaBuilder(name=name)
+        other.segments = [segment.duplicate() for segment in self.segments]
+        return other
+
     def __str__(self):
-        return '\n'.join(str(s) for s in self.segments)
+        return '#{}\n{}'.format(self.name,
+            '\n'.join(str(s) for s in self.segments))
 
 
 class TraceSegmentBuilder(object):
@@ -101,19 +158,26 @@ class TraceSegmentBuilder(object):
         'upper_bound',      # int > lower_bound
         'publish_events',   # [MsgEvent]
         'forbid_events',    # [MsgEvent]
-        'seq_number',       # int
     )
 
     MsgEvent = namedtuple('MsgEvent', ('topic', 'predicate', 'alias'))
 
-    def __init__(self, ts=0, tf=INT_INF, seq=0):
+    TraceSegment = namedtuple('TraceSegment', (
+        'lower_bound',  # int
+        'upper_bound',  # int
+        'published',    # [MsgStrategy]
+        'spam',         # {topic: MsgStrategy}
+        'is_single_instant', # bool
+        'is_bounded'    # bool
+    ))
+
+    def __init__(self, ts=0, tf=INT_INF):
         assert ts >= 0, 'ts ({}) < 0'.format(ts)
         assert tf < 0 or tf > ts, 'tf ({}) <= ts ({})'.format(tf, ts)
         self.lower_bound = ts
         self.upper_bound = tf
         self.publish_events = [] # [MsgEvent]
         self.forbid_events = [] # [MsgEvent]
-        self.seq_number = seq
 
     @property
     def is_single_instant(self):
@@ -165,6 +229,22 @@ class TraceSegmentBuilder(object):
             prefix = fun_name_prefix + 'spam'
             strategies[topic] = builder.build(fun_name_prefix=prefix)
         return strategies
+
+    def build(self, all_topics, inf=INT_INF, fun_name_prefix=''):
+        return TraceSegment(
+            self.lower_bound,
+            self.upper_bound if self.is_bounded else inf,
+            self.event_strategies(all_topics, fun_name_prefix=fun_name_prefix),
+            self.spam_strategies(all_topics, fun_name_prefix=fun_name_prefix),
+            self.is_single_instant,
+            self.is_bounded
+        )
+
+    def duplicate(self):
+        other = TraceSegmentBuilder(ts=self.lower_bound, tf=self.upper_bound)
+        other.publish_events = list(self.publish_events)
+        other.forbid_events = list(self.forbid_events)
+        return other
 
     def __str__(self):
         if self.upper_bound < 0:
