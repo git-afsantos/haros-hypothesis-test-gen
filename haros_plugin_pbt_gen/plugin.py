@@ -23,6 +23,7 @@ from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
     ContradictionError
 )
+from .schemas import schemas_for_property
 from .selectors import Selector
 from .util import StrategyError, convert_to_old_format
 from .test_runner import TestRunner
@@ -504,42 +505,46 @@ class TestGenerator(object):
 ################################################################################
 
 class StrategyManager(object):
-    __slots__ = ('published_topics', 'pkg_imports', 'deadline')
+    __slots__ = ('open_topics', 'pkg_imports', 'deadline')
 
-    def __init__(self, pubs, assumptions, data_axioms, time_axioms, deadline=10.0):
-        # pubs: topic -> ROS type token
+    def __init__(self, topics, assumptions, data_axioms, time_axioms, deadline=10.0):
+        # topics: topic -> ROS type token
         # assumptions: [HplAssumption]
         # data_axioms: [HplProperty]
         # time_axioms: [HplProperty]
-        self.published_topics = {}
+        self.open_topics = {}
         self.pkg_imports = {'std_msgs'}
-        for topic, ros_type in pubs.items():
-            self.published_topics[topic] = (ros_type, HplVacuousTruth())
+        for topic, ros_type in topics.items():
+            self.open_topics[topic] = (ros_type, HplVacuousTruth())
             self.pkg_imports.add(ros_type.package)
         self._mapping_hpl_assumptions(assumptions)
         self._mapping_hpl_axioms(data_axioms)
         self.deadline = deadline
 
     def build_strategies(self, prop):
+        builders = schemas_for_property(prop)
         # inf=INT_INF, unroll=0
-        schemas = schemas_for_property(prop, self.published_topics)
-        # schemas: [schema]
-        # schema: [TraceSegment]
+        # all_topics: {topic: (ros_type, assumption predicate)}
+        # inf: int >= 0 (value to replace infinity with)
+        #      int < 0 (treat infinity as unbounded/max. int)
+        schemas = [b.build(self.open_topics) for b in builders]
+        # schemas: [SchemaInfo]
+        # SchemaInfo: (name, [TraceSegment], string)
 
     def _mapping_hpl_assumptions(self, assumptions):
         for event in assumptions:
             topic = event.topic
-            info = self.published_topics.get(topic)
+            info = self.open_topics.get(topic)
             if info is not None:
                 phi = info[1].join(event.predicate)
-                self.published_topics[topic] = (info[0], phi)
+                self.open_topics[topic] = (info[0], phi)
 
     def _mapping_hpl_axioms(self, axioms):
         for p in axioms:
             assert p.pattern.is_absence
             for event in p.pattern.behaviour.simple_events():
                 topic = event.topic
-                info = self.published_topics.get(topic)
+                info = self.open_topics.get(topic)
                 if info is not None:
                     phi = info[1].join(event.predicate.negate())
-                    self.published_topics[topic] = (info[0], phi)
+                    self.open_topics[topic] = (info[0], phi)

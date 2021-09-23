@@ -33,14 +33,11 @@ INT_INF = -1
 # High-level Schema Builders
 ################################################################################
 
-def schemas_for_property(prop, all_topics, inf=INT_INF, unroll=0):
-    # all_topics: {topic: (ros_type, assumption predicate)}
-    # inf: int >= 0 (value to replace infinity with)
-    #      int < 0 (treat infinity as unbounded/max. int)
+def schemas_for_property(prop, unroll=0):
     # unroll: int >= 0 (how deep to unroll schemas)
     if unroll < 0:
         raise ValueError('unroll ({!r}) should be int >= 0'.format(unroll))
-    schemas = _minimal_schemas(prop, all_topics, inf)
+    schemas = _minimal_schemas(prop)
     return schemas
 
 
@@ -48,7 +45,7 @@ def schemas_for_property(prop, all_topics, inf=INT_INF, unroll=0):
 # Looks like this:
 #          forbid activator
 #   +0..: publish activator
-def _minimal_schemas(prop, all_topics, inf):
+def _minimal_schemas(prop):
     builders = [TestSchemaBuilder(name='schema0')]
     _avoid_event(prop.scope.activator, builders)
     _ensure_event(prop.scope.activator, 0, INF, builders)
@@ -64,8 +61,6 @@ def _minimal_schemas(prop, all_topics, inf):
         _ensure_event(prop.pattern.trigger, 0, INF, builders)
     else:
         assert False, str(prop.pattern)
-    for i in range(len(builders)):
-        builders[i] = builders[i].build(all_topics, inf=inf)
     return builders
 
 
@@ -114,6 +109,8 @@ def _ensure_event(event, ts, tf, builders):
 class TestSchemaBuilder(object):
     __slots__ = ('name', 'segments',)
 
+    SchemaInfo = namedtuple('SchemaInfo', ('name', 'segments', 'text'))
+
     def __init__(self, name='schema'):
         self.name = name
         self.segments = [TraceSegmentBuilder(0, 1)]
@@ -140,7 +137,7 @@ class TestSchemaBuilder(object):
             prefix = '{}_{}_'.format(self.name, i)
             schema.append(self.segments[i].build(all_topics,
                 inf=inf, fun_name_prefix=prefix))
-        return schema
+        return self.SchemaInfo(self.name, schema, str(self))
 
     def duplicate(self, name='schema'):
         other = TestSchemaBuilder(name=name)
@@ -231,7 +228,7 @@ class TraceSegmentBuilder(object):
         return strategies
 
     def build(self, all_topics, inf=INT_INF, fun_name_prefix=''):
-        return TraceSegment(
+        return self.TraceSegment(
             self.lower_bound,
             self.upper_bound if self.is_bounded else inf,
             self.event_strategies(all_topics, fun_name_prefix=fun_name_prefix),
