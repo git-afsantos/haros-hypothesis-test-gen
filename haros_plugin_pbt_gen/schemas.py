@@ -244,18 +244,24 @@ class TraceSegmentBuilder(object):
                 if e.topic == topic:
                     builder.assume(e.predicate.negate())
             prefix = fun_name_prefix + 'spam'
-            strategies[topic] = builder.build(fun_name_prefix=prefix)
+            try:
+                strategies[topic] = builder.build(fun_name_prefix=prefix)
+            except ContradictionError:
+                pass
         return strategies
 
     def build(self, all_topics, inf=INT_INF, fun_name_prefix=''):
-        return TraceSegment(
-            self.lower_bound,
-            self.upper_bound if self.is_bounded else inf,
-            self.event_strategies(all_topics, fun_name_prefix=fun_name_prefix),
-            self.spam_strategies(all_topics, fun_name_prefix=fun_name_prefix),
-            self.is_single_instant,
-            self.is_bounded
-        )
+        try:
+            return TraceSegment(
+                self.lower_bound,
+                self.upper_bound if self.is_bounded else inf,
+                self.event_strategies(all_topics, fun_name_prefix=fun_name_prefix),
+                self.spam_strategies(all_topics, fun_name_prefix=fun_name_prefix),
+                self.is_single_instant,
+                self.is_bounded
+            )
+        except ContradictionError as e:
+            raise StrategyError(e)
 
     def duplicate(self):
         other = TraceSegmentBuilder(ts=self.lower_bound, tf=self.upper_bound)
@@ -310,7 +316,9 @@ class MessageStrategyBuilder(object):
             if phi.is_true:
                 return self.default_strategy()
             else:
-                raise StrategyError.unsat(self.topic, self.ros_type)
+                # raise StrategyError.unsat(self.topic, self.ros_type)
+                raise ContradictionError('{} ({})'.format(
+                    self.topic, self.ros_type))
         # FIXME remove this and remake the strategy generator
         conditions = convert_to_old_format(phi.condition)
         strategy = self._msg_generator(self.ros_type, conditions)

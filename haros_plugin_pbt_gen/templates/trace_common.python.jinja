@@ -1,5 +1,7 @@
 {% import 'default_msg_strategies.python.jinja' as msgs %}
 
+{% set TIME_INF = 1000 %}
+
 {# Generation of Random messages. #}
 {% macro _gen_spam(spam) -%}
 # ----- Spam ------------------------------------------
@@ -166,3 +168,49 @@ if triggers:
     {% endif %}
 {% endif %}
 {%- endmacro %}
+
+
+
+
+{% macro _trace_segment(segment) -%}
+# -- new trace segment --
+{%- endmacro %}
+
+
+{##############################################################################}
+{# Template Body #}
+{##############################################################################}
+
+{# receives:
+    schemas: [SchemaInfo]
+#}
+
+{# SchemaInfo:
+    name: string
+    segments: [TraceSegment]
+    text: string
+#}
+
+{# TraceSegment:
+    lower_bound: int
+    upper_bound: int
+    published: [MsgStrategy]
+    spam: {topic: MsgStrategy}
+    is_single_instant: bool
+    is_bounded: bool
+#}
+
+{% for schema in schemas %}
+
+'''
+{{ schema.text }}
+'''
+
+@strategies.composite
+def schema_{{ schema.name }}(draw):
+    trace = []
+    {% for segment in schema.segments %}
+{{ _trace_segment(segment)|indent(4, first=true) }}
+    {% endfor %}
+    return trace
+{% endfor %}
