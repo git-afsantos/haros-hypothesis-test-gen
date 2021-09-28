@@ -296,25 +296,6 @@ class TestTracer(unittest.TestCase):
 
 {{ _eval_trace(axioms)|indent(width=4, first=true) }}
 
-    def _time_analysis(self, trace, hz):
-        clock = 0.0
-        relative_clock = 0.0
-        sleep_time = 1.0 / hz
-        for chunk in trace.chunks:
-            delta = sleep_time
-            if chunk.delay > 0.0:
-                if chunk.relative_delay:
-                    t = relative_clock + chunk.delay
-                    if t > clock + delta:
-                        delta = t - clock
-                else:
-                    delta += chunk.delay
-            clock += delta
-            if chunk.set_clock:
-                relative_clock = clock
-            chunk._trace_time = clock
-            chunk._delta_time = delta
-
 {{ _setup_test(main_monitor, monitors, axioms)|indent(width=4, first=true) }}
 
 {{ _setup_sut(commands, settings)|indent(width=4, first=true) }}
