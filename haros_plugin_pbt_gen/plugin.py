@@ -121,7 +121,7 @@ PublisherTemplate = namedtuple("PublisherTemplate",
 
 TestTemplate = namedtuple("TestTemplate",
     ("default_msg_strategies", "custom_msg_strategies",
-     "trace_strategy", "monitor_templates",
+     "trace_strategies", "monitor_templates",
      "test_case_template", "pkg_imports", "property_text"))
 
 Subscriber = namedtuple("Subscriber", ("topic", "type_token", "fake"))
@@ -324,7 +324,7 @@ class TestGenerator(object):
             for sub in subs:
                 pkg_imports.add(sub.type_token.package)
             tests.append(TestTemplate(py_default_msgs, py_custom_msgs,
-                self._render_trace_strategy(p, strategies), py_monitors,
+                self._render_trace_strategy(strategies), py_monitors,
                 py_test_case, pkg_imports, monitors[i].hpl_string,))
         return tests
 
@@ -413,27 +413,10 @@ class TestGenerator(object):
         os.chmod(filename, mode)
         self.iface.export_file(filename)
 
-    def _render_trace_strategy(self, prop, data):
-        data["reps"] = 1
-        if prop.scope.is_after_until:
-            data["reps"] = self.settings.get("max_scopes", 2)
-        if prop.pattern.is_absence:
-            return self._render_template(
-                "trace_absence.python.jinja", data, strip=True)
-        elif prop.pattern.is_existence:
-            return self._render_template(
-                "trace_existence.python.jinja", data, strip=True)
-        elif prop.pattern.is_requirement:
-            return self._render_template(
-                "trace_precedence.python.jinja", data, strip=True)
-        elif prop.pattern.is_prevention:
-            return self._render_template(
-                "trace_prevention.python.jinja", data, strip=True)
-        elif prop.pattern.is_response:
-            return self._render_template(
-                "trace_response.python.jinja", data, strip=True)
-        else:
-            assert False, "unknown property pattern"
+    def _render_trace_strategy(self, data):
+        # data["reps"] = self.settings.get("max_scopes", 2)
+        return self._render_template(
+            "trace_strategies.python.jinja", data, strip=True)
 
     def _render_template(self, filename, data, strip=True):
         template = self.jinja_env.get_template(filename)

@@ -214,8 +214,8 @@ class Trace(object):
 {% endfor %}
     )
 
-    def __init__(self):
-        self.events = []
+    def __init__(self, events=None):
+        self.events = events if events is not None else []
 {% for alias in aliases %}
         self.msg_{{ alias }} = None
 {% endfor %}
@@ -228,8 +228,18 @@ class Trace(object):
     def last(self):
         return None if not self.events else self.events[-1]
 
+    @property
+    def n_messages(self):
+        return len(self.events)
+
     def append(self, event):
         self.events.append(event)
+
+    def __len__(self):
+        return len(self.events)
+
+    def __iter__(self):
+          return iter(self.events)
 
     def __str__(self):
         parts = []
@@ -237,6 +247,9 @@ class Trace(object):
             parts.append("+{} '{}':\n{}".format(event.timestamp,
                 event.topic, event.msg))
         return '\n'.join(parts)
+
+    def __repr__(self):
+          return "Trace(events={})".format(repr(self.events))
 
 
 {% for schema in schemas %}
