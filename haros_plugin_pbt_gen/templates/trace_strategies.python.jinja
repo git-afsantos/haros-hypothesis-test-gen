@@ -270,3 +270,10 @@ def schema_{{ schema.name }}(draw):
 {{ _handle_segments(schema)|indent(4, first=true) }}
     return trace
 {% endfor %}
+
+
+traces = strategies.one_of((
+{% for schema in schemas %}
+    schema_{{ schema.name }},
+{% endfor %}
+))

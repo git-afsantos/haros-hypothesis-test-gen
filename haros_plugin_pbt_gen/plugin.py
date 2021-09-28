@@ -307,6 +307,7 @@ class TestGenerator(object):
             ms = self._get_test_monitors(i, monitors)
             subs = self._get_subscribers()
             data = {
+                "schemas": strategies["schemas"],
                 "main_monitor": monitors[i].class_name,
                 "monitors": ms,
                 "axioms": axioms,
