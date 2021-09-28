@@ -147,7 +147,7 @@ class HiddenPrints(object):
 # Runtime Verification Classes
 ################################################################################
 
-EvalScope = namedtuple("EvalScope", ("chunks", "state",))
+EvalScope = namedtuple("EvalScope", ("events", "state",))
 
 
 {% for monitor in monitors %}

@@ -35,13 +35,11 @@ def setUp(self):
     self.counterexample_size = -1
     self.n_fail = 0
     self.times = []
-    self.clock = 0
 {% endmacro %}
 
 {% macro _setup_test(main_monitor, monitors, axioms) %}
 def _setup_test(self):
     self.launch_time = 0
-    self.clock = 0
     self.deadline = 0
     self.monitors = []
     {% for monitor in monitors %}
@@ -81,7 +79,6 @@ def _setup_test(self):
 {% macro _setup_sut(commands, settings) %}
 def _setup_sut(self):
     self.launch_time = get_time()
-    self.clock = self.launch_time
     self.deadline = self.launch_time + {# defaults to 15 seconds -#}
         {{ settings['deadline']|d(15, true) }}
     for monitor in self.monitors:
@@ -120,63 +117,42 @@ def _setup_sut(self):
 
 
 {% macro _test_hypothesis(settings, is_liveness) %}
-@settings(max_examples={{ settings['max_examples']|d(100, true) }}, {# -#}
-            deadline=None,
-          suppress_health_check=(HealthCheck.filter_too_much, HealthCheck.too_slow))
-@given(trace=traces(), hz=strategies.sampled_from((1000, 100, 10, 5, 1)))
-def _test_hypothesis_properties(self, trace, hz):
+@settings(
+    max_examples={{ settings['max_examples']|d(100, true) }},
+    deadline=None,
+    suppress_health_check=(HealthCheck.filter_too_much, HealthCheck.too_slow)
+)
+@given(trace=traces())
+def _test_hypothesis_properties(self, trace):
     if rospy.is_shutdown():
         return
-    self._eval_trace(trace, hz)
+    self._eval_trace(trace)
     passed = False
     self.n_examples += 1
     self._setup_test()
     print("[Example #{}]: Launching SUT...".format(self.n_examples))
     self._setup_sut()
     self.trace_done = False
-    rate = rospy.Rate(hz)
     if rospy.is_shutdown():
         return
     try:
-        self._update()
-        self.trace_start_time = get_time()
+        time_prev = get_time()
+        self._update(time_now=time_prev)
+        self.trace_start_time = time_prev
         mon = self.main_monitor
-        for rep in range(trace.repetitions):
-            if self.n_scopes < rep:
-                raise BuggyTestError.missing_terminator()
-            while self.monitor_active and self.n_scopes == rep:
-                self._update()
-                rate.sleep()
-            for chunk in trace:
-                if chunk.req_scope:
-                    if self.n_scopes == rep:
-                        while not self.monitor_active:
-                            self._update()
-                            rate.sleep()
-                    else:
-                        if not self.monitor_active: # already terminated
-                            continue
-                elif chunk.req_not_scope:
-                    if self.monitor_active:
-                        if not self.n_scopes > rep:
-                            raise BuggyTestError.missing_terminator()
-                        continue
-                if chunk.delay > 0.0:
-                    if chunk.relative_delay:
-                        while (get_time() - self.clock) < chunk.delay:
-                            self._update()
-                            rate.sleep()
-                    else:
-                        rospy.sleep(chunk.delay)
-                else:
+        rate = rospy.Rate(1000) # every 1 ms
+        for event in trace:
+            time_now = get_time()
+            if event.timestamp > 0:
+                time_target = time_prev + event.timestamp / 1000.0
+                while time_now < time_target:
+                    self._update(time_now=time_now)
                     rate.sleep()
-                self._update()
-                pub_time = get_time()
-                for msg, topic in chunk.messages:
-                    self.pub_log.append(MsgRecord(topic, pub_time, msg))
-                    self.pubs[topic].publish(msg, time=pub_time)
-                if chunk.set_clock:
-                    self.clock = get_time()
+                    time_now = get_time()
+            self._update(time_now=time_now)
+            self.pub_log.append(MsgRecord(event.topic, time_now, event.msg))
+            self.pubs[event.topic].publish(event.msg, time=time_now)
+            time_prev = time_now
         self.trace_done = True
         self._check_status()
         self._update()
@@ -239,9 +215,8 @@ def _check_outcome(self, trace):
 
 
 {% macro _eval_trace(axioms) %}
-def _eval_trace(self, trace, hz):
+def _eval_trace(self, trace):
 {% if axioms %}
-    self._time_analysis(trace, hz)
     try:
     {% for monitor in axioms %}
         assume(eval_{{ monitor.class_name }}(trace))
@@ -360,18 +335,17 @@ class TestTracer(unittest.TestCase):
         self._wait_for_nodes(online=False)
         rospy.sleep(1.0)
 
-    def _update(self, set_clock=False):
+    def _update(self, time_now=None):
         if rospy.is_shutdown():
             raise InconclusiveTestError.rospy_shutdown()
         for launch in self.launches:
             launch.spin_once()
-        now = get_time()
-        if set_clock:
-            self.clock = now
+        if time_now is None:
+            time_now = get_time()
         for monitor in self.monitors:
-            monitor.on_timer(now)
+            monitor.on_timer(time_now)
         for monitor in self.axioms:
-            monitor.on_timer(now)
+            monitor.on_timer(time_now)
 
 {# {{ _check_outcome(is_liveness)|indent(width=4, first=true) }} #}
 
