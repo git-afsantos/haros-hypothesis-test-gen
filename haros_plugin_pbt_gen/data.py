@@ -105,7 +105,7 @@ class MessageStrategyGenerator(object):
         return statements
 
     def make_msg_arg(self, name, selector):
-        arg_name = "msg_" + name
+        arg_name = "trace.msg_" + name
         if arg_name not in self.args:
             self.args.append(arg_name)
         if not isinstance(selector, Selector):

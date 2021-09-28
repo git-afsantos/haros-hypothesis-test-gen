@@ -1,5 +1,9 @@
 {% import 'default_msg_strategies.python.jinja' as msgs %}
 
+{##############################################################################}
+{# Constants and Utility #}
+{##############################################################################}
+
 {% set TIME_INF = 1000 %}
 {% set MAX_SPAM = 3 %}
 
@@ -18,229 +22,21 @@
 {%- endmacro %}
 
 
-{# Generation of Random messages. #}
-{% macro _gen_spam(spam) -%}
-# ----- Spam ------------------------------------------
-all_msgs = []
-{% for strategy in spam %}
-    {% if strategy.is_default %}
-elems = {{ msgs.strategy_name(strategy.pkg, strategy.msg) }}()
-    {% else %}
-elems = {{ strategy.name }}({{ strategy.args|join(', ') }})
-    {% endif %}
-elems = strategies.tuples(elems, strategies.just("{{ strategy.topic }}"))
-all_msgs.extend(draw(strategies.lists(elems, min_size=0, max_size=3)))
-{% endfor %}
-{%- endmacro %}
-
-
-{% macro gen_spam_chunks(spam) -%}
-{% if spam %}
-{{ _gen_spam(spam) }}
-if all_msgs:
-    r.shuffle(all_msgs)
-    chunks.extend(draw(chunk_splits(all_msgs)))
-{% else %}
-# There are no strategies for random messages.
-{% endif %}
-{%- endmacro %}
-
-
-{% macro gen_activator(p) -%}
-{% if p.spam %}
-{{ _gen_spam(p.spam) }}
-if all_msgs:
-    r.shuffle(all_msgs)
-    chunks.extend(draw(chunk_splits(all_msgs)))
-else:
-    chunks.append(Chunk())
-{% else %}
-# There are no strategies for random messages.
-chunks.append(Chunk())
-{% endif %}
-# ----- Activator -------------------------------------
-{% if p.strategy.name == '_' %}
-for _chunk in chunks:
-    _chunk.req_not_scope = True
-# Activator is sent by the SUT.
-chunks.append(Chunk())
-chunks[-1].req_scope = True
-chunks[-1].set_clock = True
-{% else %}
-    {% if p.strategy.is_default %}
-        {% set strategy = msgs.strategy_name(p.strategy.pkg, p.strategy.msg) %}
-        {% set args = '' %}
-    {% else %}
-        {% set strategy = p.strategy.name %}
-        {% set args = p.strategy.args|join(', ') %}
-    {% endif %}
-msg = (draw({{ strategy }}({{ args }})), "{{ p.strategy.topic }}")
-    {% if p.strategy.alias %}
-msg_{{ p.strategy.alias }} = msg[0]
-    {% endif %}
-chunks[-1].messages.append(msg)
-chunks[-1].set_clock = True
-for _chunk in chunks:
-    _chunk.req_not_scope = True
-{% endif %}
-{%- endmacro %}
-
-
-{% macro gen_terminator(q, min_delay, max_delay) -%}
-{{ gen_delay_chunk(min_delay, max_delay, relative_delay=true) }}
-{% if q.spam %}
-{{ _gen_spam(q.spam) }}
-if all_msgs:
-    r.shuffle(all_msgs)
-    chunk.messages.extend(all_msgs)
-{% else %}
-# There are no strategies for random messages.
-{% endif %}
-# ----- Terminator ------------------------------------
-{% if q.strategy.name == '_' %}
-chunk.req_scope = True
-# Terminator is sent by the SUT.
-chunks.append(Chunk())
-chunks[-1].req_not_scope = True
-{% else %}
-    {% if q.strategy.is_default %}
-        {% set strategy = msgs.strategy_name(q.strategy.pkg, q.strategy.msg) %}
-        {% set args = '' %}
-    {% else %}
-        {% set strategy = q.strategy.name %}
-        {% set args = q.strategy.args|join(', ') %}
-    {% endif %}
-msg = (draw({{ strategy }}({{ args }})), "{{ q.strategy.topic }}")
-chunk.messages.append(msg)
-chunk.req_scope = True
-{% endif %}
-{%- endmacro %}
-
-
-{% macro gen_delay_chunk(min_delay, max_delay, relative_delay=true) -%}
-chunk = Chunk()
-{% if relative_delay %}
-chunk.relative_delay = True
-{% else %}
-chunk.relative_delay = False
-{% endif %}
-{% if min_delay != max_delay %}
-chunk.delay = draw(strategies.sampled_from(({{ min_delay }}, {{ max_delay }})))
-{% else %}
-chunk.delay = {{ min_delay }}
-{% endif %}
-chunks.append(chunk)
-{%- endmacro %}
-
-
-{% macro gen_triggers(a, b) -%}
-{% if a.strategy.is_default %}
-    {% set strategy = msgs.strategy_name(a.strategy.pkg, a.strategy.msg) %}
-    {% set args = '' %}
-{% else %}
-    {% set strategy = a.strategy.name %}
-    {% set args = a.strategy.args|join(', ') %}
-{% endif %}
-# ----- Trigger ---------------------------------------
-elems = strategies.tuples({{ strategy }}({{ args }}), strategies.just("{{ a.strategy.topic }}"))
-triggers = draw(strategies.lists(elems, min_size={{ a.min_num }}, max_size={{ a.max_num }}))
-{% if a.min_num > 0 %}
-new_chunks = draw(chunk_splits(triggers))
-chunks.extend(new_chunks)
-delays = strategies.sampled_from((0.0, {{ b.timeout }}))
-for chunk in new_chunks:
-    chunk.relative_delay = True
-    chunk.delay = draw(delays)
-    chunk.set_clock = True
-    chunk.contains_trigger = True
-    chunk.req_scope = True
-    {% if a.spam %}
-{{ _gen_spam(a.spam) }}
-if all_msgs:
-    r.shuffle(all_msgs)
-    i = 0
-    for msg in all_msgs:
-        new_chunks[i].messages.append(msg)
-        i = (i + 1) % len(new_chunks)
-    {% endif %}
-{% else %}{# a.min_num == 0 #}
-if triggers:
-    new_chunks = draw(chunk_splits(triggers))
-    chunks.extend(new_chunks)
-    delays = strategies.sampled_from((0.0, {{ b.timeout }}))
-    for chunk in new_chunks:
-        chunk.relative_delay = True
-        chunk.delay = draw(delays)
-        chunk.set_clock = True
-        chunk.req_scope = True
-    {% if a.spam %}
-{{ _gen_spam(a.spam)|indent(width=4, first=true) }}
-    if all_msgs:
-        r.shuffle(all_msgs)
-        i = 0
-        for msg in all_msgs:
-            new_chunks[i].messages.append(msg)
-            i = (i + 1) % len(new_chunks)
-    {% endif %}
-{% endif %}
-{%- endmacro %}
-
-
-
-
-
-{# Generates a message, given a message strategy. #}
-{% macro _gen_msg(msg_strategy) -%}
-{% if msg_strategy.is_default %}
-    {% set fun = msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) %}
-    {% set args = '' %}
-{% else %}
-    {% set fun = msg_strategy.name %}
-    {% set args = msg_strategy.args|join(', ') %}
-{% endif %}
-msg = draw({{ fun }}({{ args }}))
-{% if msg_strategy.alias %}
-msg_{{ msg_strategy.alias }} = msg
-{% endif %}
-{%- endmacro %}
-
-
-{# FIXME: this should be `strategies.one_of`, but we must fix the args #}
-{% macro _spam_union_strategy(spam_strategies) -%}
-spam_strategies = (
-{# go for defaults first #}
-{% for msg_strategy in spam_strategies %}
-  {% if msg_strategy.is_default %}
-    {{ msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) }},
-  {% endif %}
-{% endfor %}
-{# then go for custom msgs #}
-{% for msg_strategy in spam_strategies %}
-  {% if not msg_strategy.is_default %}
-    {{ msg_strategy.name }},
-  {% endif %}
-{% endfor %}
-)
-n = draw(strategies.integers(min_value=0, max_value={{ MAX_SPAM + 1 }}))
-for i in range(n):
-    k
-{%- endmacro %}
-
+{##############################################################################}
+{# Event Generation #}
+{##############################################################################}
 
 {#
-  Generates spam events.
-  Builds a list of messages and then gradually "spends" the
-    available time between the previous and the next mandatory events.
+  Generation of mandatory and spam events.
+  Places generated messages in the trace, in order.
+  Assumes that mandatory timestamps have been pre-generated.
 #}
-{% macro _gen_spam_events(spam_strategies, i) -%}
-# ---- spam events ----
-{% if len(spam_strategies) == 0 -%}
-# There are no spam events.
-{%- elif len(spam_strategies) == 1 -%}
-{# TODO #}
-{%- else -%}
-{# TODO #}
-{%- endif %}
+{% macro _handle_segments(schema) -%}
+{% for segment in schema.segments %}
+# ---- {{ _ordinal(loop.index) }} trace segment ----
+{{ _gen_mandatory_events(segment.published, loop.index0) }}
+{{ _gen_spam_events(segment.spam.values(), schema, loop.index0) }}
+{% endfor %}
 {%- endmacro %}
 
 
@@ -262,6 +58,66 @@ trace.append(rec)
 {% else %}
 # There are not mandatory events.
 {% endfor %}
+{%- endmacro %}
+
+
+{#
+  Generates spam events.
+  Builds a list of messages and then gradually "spends" the
+    available time between the current and the next trace segments.
+#}
+{% macro _gen_spam_events(spam_strategies, schema, i) -%}
+# ---- spam events ----
+{% if len(spam_strategies) == 0 -%}
+# There are no spam events.
+{%- else -%}
+n = draw(strategies.integers(min_value=0, max_value={{ MAX_SPAM }}))
+while n > 0:
+    strategy, topic = draw({{ _spam_name(schema, i) }})
+    msg = draw(strategy(trace=trace))
+    if timestamps[{{ i + 1 }}] == 0:
+      timestamp = 0
+    else:
+      timestamp = draw(integers(min_value=0, max_value=timestamps[{{ i + 1 }}]))
+    timestamps[{{ i + 1 }}] -= timestamp
+    rec = MsgRecord(topic, timestamp, msg)
+    trace.append(rec)
+    n -= 1
+{%- endif %}
+{%- endmacro %}
+
+
+{# Generates a message, given a message strategy. #}
+{% macro _gen_msg(msg_strategy) -%}
+{% if msg_strategy.is_default %}
+    {% set fun = msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) %}
+{% else %}
+    {% set fun = msg_strategy.name %}
+{% endif %}
+msg = draw({{ fun }}(trace=trace))
+{% if msg_strategy.alias %}
+trace.msg_{{ msg_strategy.alias }} = msg
+{% endif %}
+{%- endmacro %}
+
+
+{##############################################################################}
+{# Timestamp Allocation #}
+{##############################################################################}
+
+{#
+  Allocation of mandatory timestamps.
+  One timestamp per schema time interval, plus an 'infinity' at the end.
+  The additional timestamp is required for spam placement.
+#}
+{% macro _allocate_timestamps(schema) -%}
+# ---- timestamp allocation ----
+timestamps = []
+{% for segment in schema.segments %}
+{{ _gen_timestamp(segment) }}
+timestamps.append(timestamp)
+{% endfor %}
+timestamps.append({{ TIME_INF }})
 {%- endmacro %}
 
 
@@ -294,35 +150,36 @@ timestamp = draw(strategies.sampled_from(({# -#}
 {%- endif %}
 {%- endmacro %}
 
-{#
-  Generation of mandatory and spam events.
-  Places generated messages in the trace, in order.
-  Assumes that mandatory timestamps have been pre-generated.
-#}
-{% macro _handle_segments(segments) -%}
-{% for segment in segments %}
-# ---- {{ _ordinal(loop.index) }} trace segment ----
-{{ _gen_mandatory_events(segment.published, loop.index0) }}
-{{ _gen_spam_events(segment.spam.values(), loop.index0) }}
-{% endfor %}
+
+{##############################################################################}
+{# Unified Spam Strategies #}
+{##############################################################################}
+
+{% macro _spam_name(schema, i) -%}
+spam_{{ schema.name }}_{{ loop.index0 }}
 {%- endmacro %}
 
+{% macro _unified_spam_strategies(schema) %}
+  {% for segment in schema.segments %}
+    {% if len(segment.spam) > 0 %}
+{# go for defaults first, then go for custom msgs #}
+{{ _spam_name(schema, loop.index0) }} = strategies.sampled_from((
+      {% for msg_strategy in segment.spam.values() %}
+        {% if msg_strategy.is_default %}
+    ({{ msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) }}, {# -#}
+      '{{ msg_strategy.topic }}'),
+        {% endif %}
+      {% endfor %}
+      {% for msg_strategy in segment.spam.values() %}
+        {% if not msg_strategy.is_default %}
+    ({{ msg_strategy.name }}, '{{ msg_strategy.topic }}'),
+        {% endif %}
+      {% endfor %}
+))
 
-{#
-  Allocation of mandatory timestamps.
-  One timestamp per schema time interval, plus an 'infinity' at the end.
-  The additional timestamp is required for spam placement.
-#}
-{% macro _allocate_timestamps(segments) -%}
-# ---- timestamp allocation ----
-timestamps = []
-{% for segment in segments %}
-{{ _gen_timestamp(segment) }}
-timestamps.append(timestamp)
-{% endfor %}
-timestamps.append({{ TIME_INF }})
-{%- endmacro %}
-
+    {% endif %}
+  {% endfor %}
+{% endmacro %}
 
 {##############################################################################}
 {# Template Body #}
@@ -330,6 +187,7 @@ timestamps.append({{ TIME_INF }})
 
 {# receives:
     schemas: [SchemaInfo]
+    aliases: [string]
 #}
 
 {# SchemaInfo:
@@ -347,16 +205,55 @@ timestamps.append({{ TIME_INF }})
     is_bounded: bool
 #}
 
+
+class Trace(object):
+    __slots__ = (
+        'events', # [MsgRecord]
+{% for alias in aliases %}
+        'msg_{{ alias }}', # MsgRecord
+{% endfor %}
+    )
+
+    def __init__(self):
+        self.events = []
+{% for alias in aliases %}
+        self.msg_{{ alias }} = None
+{% endfor %}
+
+    @property
+    def first(self):
+        return None if not self.events else self.events[0]
+
+    @property
+    def last(self):
+        return None if not self.events else self.events[-1]
+
+    def append(self, event):
+        self.events.append(event)
+
+    def __str__(self):
+        parts = []
+        for event in self.events:
+            parts.append("+{} '{}':\n{}".format(event.timestamp,
+                event.topic, event.msg))
+        return '\n'.join(parts)
+
+
 {% for schema in schemas %}
+
+################################################################################
+# {{ _ordinal(loop.index) }} Trace Schema
+################################################################################
+
+{{ _unified_spam_strategies(schema) }}
 
 '''
 {{ schema.text }}
 '''
-
 @strategies.composite
 def schema_{{ schema.name }}(draw):
-    trace = []
-{{ _allocate_timestamps(schema.segments)|indent(4, first=true) }}
-{{ _handle_segments(schema.segments)|indent(4, first=true) }}
+    trace = Trace()
+{{ _allocate_timestamps(schema)|indent(4, first=true) }}
+{{ _handle_segments(schema)|indent(4, first=true) }}
     return trace
 {% endfor %}

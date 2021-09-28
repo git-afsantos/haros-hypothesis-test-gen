@@ -163,9 +163,9 @@ class TestSchemaBuilder(object):
         # all_topics: {topic: (ros_type, assumption)}
         schema = []
         for i in range(len(self.segments)):
-            prefix = '{}_{}_'.format(self.name, i)
+            segment_name = '{}_{}'.format(self.name, i)
             schema.append(self.segments[i].build(all_topics,
-                inf=inf, fun_name_prefix=prefix))
+                inf=inf, name=segment_name))
         return SchemaInfo(self.name, schema, str(self))
 
     def duplicate(self, name='schema'):
@@ -220,43 +220,45 @@ class TraceSegmentBuilder(object):
     def forbid(self, topic, predicate):
         self.forbid_events.append(self.MsgEvent(topic, predicate, None))
 
-    def event_strategies(self, all_topics, fun_name_prefix=''):
+    def event_strategies(self, all_topics, name='segment'):
         # all_topics: {topic: (ros_type, assumption)}
         strategies = []
         for i in range(len(self.publish_events)):
             pe = self.publish_events[i]
             ros_type, assumed = all_topics[pe.topic]
-            builder = MessageStrategyBuilder(pe.topic, ros_type)
+            version = '{}_{}p'.format(name, i)
+            builder = MessageStrategyBuilder(pe.topic, ros_type, ver=version)
             builder.assume(assumed)
-            prefix = '{}pub{}'.format(fun_name_prefix, i)
-            strategies.append(builder.build(predicate=pe.predicate,
-                alias=pe.alias, fun_name_prefix=prefix))
+            strategies.append(builder.build(
+                predicate=pe.predicate, alias=pe.alias))
         return strategies
 
-    def spam_strategies(self, all_topics, fun_name_prefix=''):
+    def spam_strategies(self, all_topics, name='segment'):
         # all_topics: {topic: (ros_type, assumption)}
         strategies = {}
+        i = 0
         for topic, info in all_topics.items():
             ros_type, assumed = info
-            builder = MessageStrategyBuilder(topic, ros_type)
+            version = '{}_{}s'.format(name, i)
+            i += 1
+            builder = MessageStrategyBuilder(topic, ros_type, ver=version)
             builder.assume(assumed)
             for e in self.forbid_events:
                 if e.topic == topic:
                     builder.assume(e.predicate.negate())
-            prefix = fun_name_prefix + 'spam'
             try:
-                strategies[topic] = builder.build(fun_name_prefix=prefix)
+                strategies[topic] = builder.build()
             except ContradictionError:
                 pass
         return strategies
 
-    def build(self, all_topics, inf=INT_INF, fun_name_prefix=''):
+    def build(self, all_topics, inf=INT_INF, name='segment'):
         try:
             return TraceSegment(
                 self.lower_bound,
                 self.upper_bound if self.is_bounded else inf,
-                self.event_strategies(all_topics, fun_name_prefix=fun_name_prefix),
-                self.spam_strategies(all_topics, fun_name_prefix=fun_name_prefix),
+                self.event_strategies(all_topics, name=name),
+                self.spam_strategies(all_topics, name=name),
                 self.is_single_instant,
                 self.is_bounded
             )
@@ -286,12 +288,13 @@ class TraceSegmentBuilder(object):
 ################################################################################
 
 class MessageStrategyBuilder(object):
-    __slots__ = ('topic', 'ros_type', 'predicate')
+    __slots__ = ('topic', 'ros_type', 'predicate', 'version')
 
-    def __init__(self, topic, ros_type):
+    def __init__(self, topic, ros_type, ver='1'):
         self.topic = topic
         self.ros_type = ros_type
         self.predicate = HplVacuousTruth()
+        self.version = ver
 
     @property
     def phi(self):
@@ -308,7 +311,7 @@ class MessageStrategyBuilder(object):
     def assume(self, predicate):
         self.predicate = self.predicate.join(assumption.predicate)
 
-    def build(self, predicate=None, alias=None, fun_name_prefix='cms'):
+    def build(self, predicate=None, alias=None):
         phi = self.predicate
         if predicate is not None:
             phi = predicate.join(phi)
@@ -322,8 +325,8 @@ class MessageStrategyBuilder(object):
         # FIXME remove this and remake the strategy generator
         conditions = convert_to_old_format(phi.condition)
         strategy = self._msg_generator(self.ros_type, conditions)
-        name = '{}_{}_{}'.format(fun_name_prefix,
-            self.ros_type.package, self.ros_type.message)
+        name = '{}_{}_{}'.format(self.ros_type.package,
+            self.ros_type.message, self.version)
         return MsgStrategy(name, strategy.args, self.ros_type.package,
             self.ros_type.message, strategy.build(), False, self.topic, alias)
 

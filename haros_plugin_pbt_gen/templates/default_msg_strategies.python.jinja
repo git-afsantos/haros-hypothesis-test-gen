@@ -27,7 +27,7 @@ draw({{ _type_to_strategy(type_token.type_name) }}(msg=msg.{{ name }})){# -#}
     Default strategies draw all values at random, without constraints. #}
 {% macro default_msg(ros_type) %}
 @strategies.composite
-def {{ strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
+def {{ strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None, trace=None):
     msg = msg or {{ ros_type.package }}.{{ ros_type.message }}()
     {% for field, type_token in ros_type.fields.items() %}
     {% if type_token.is_array %}
@@ -43,6 +43,8 @@ def {{ strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
     {% endif %}
     {% endfor %}
     return msg
+
+{{ strategy_name(ros_type.package, ros_type.message) }}.is_custom_msg = False
 {% endmacro %}
 
 
@@ -54,7 +56,7 @@ def {{ strategy_name(ros_type.package, ros_type.message) }}(draw, msg=None):
 
 {% if random_headers %}
 @strategies.composite
-def ros_std_msgs_Header(draw, msg=None):
+def ros_std_msgs_Header(draw, msg=None, trace=None):
     msg = msg or std_msgs.Header()
     msg.stamp = draw(ros_time())
     msg.frame_id = draw(ros_string())
@@ -63,6 +65,8 @@ def ros_std_msgs_Header(draw, msg=None):
     return msg
 
 std_msgs_Header = ros_std_msgs_Header
+
+std_msgs_Header.is_custom_msg = False
 {% else %}
 import genpy
 
@@ -106,13 +110,15 @@ class AutoTime(genpy.Time):
 
 
 @strategies.composite
-def ros_std_msgs_Header(draw, msg=None):
+def ros_std_msgs_Header(draw, msg=None, trace=None):
     msg = msg or std_msgs.Header()
     msg.stamp = AutoTime()
     msg.frame_id = draw(ros_string())
     return msg
 
 std_msgs_Header = ros_std_msgs_Header
+
+std_msgs_Header.is_custom_msg = False
 {% endif %}
 
 {% for type_token in type_tokens %}

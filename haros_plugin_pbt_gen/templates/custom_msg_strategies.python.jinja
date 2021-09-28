@@ -27,16 +27,14 @@ for {{ statement.variable }} in {{ statement.expression }}:
     must be satisfied. #}
 {% macro custom_msg(strategy) %}
 @strategies.composite
-{% if strategy.args %}
-def {{ strategy.name }}(draw, {{ strategy.args|join(', ') }}):
-{% else %}
-def {{ strategy.name }}(draw):
-{% endif %}
+def {{ strategy.name }}(draw, trace=None):
     msg = {{ strategy.pkg }}.{{ strategy.msg }}()
 {% for statement in strategy.statements %}
 {{ _statement(statement)|indent(width=4, first=True) }}
 {% endfor %}
     return msg
+
+{{ strategy.name }}.is_custom_msg = True
 {% endmacro %}
 
 

@@ -531,6 +531,7 @@ class StrategyManager(object):
         # SchemaInfo: (name, [TraceSegment], string)
         default_strategies = set()
         custom_msg_strategies = []
+        aliases = []
         for schema in schemas:
             for seg in schema.segments:
                 for strategy in iterchain(seg.published, seg.spam.values()):
@@ -539,10 +540,13 @@ class StrategyManager(object):
                         default_strategies.add(ros_type)
                     else:
                         custom_msg_strategies.append(strategy)
+                    if strategy.alias is not None:
+                        aliases.append(strategy.alias)
         return {
             'schemas': schemas,
             'default_strategies': default_strategies,
             'custom_msg_strategies': custom_msg_strategies,
+            'aliases': aliases,
         }
 
     def _mapping_hpl_assumptions(self, assumptions):
