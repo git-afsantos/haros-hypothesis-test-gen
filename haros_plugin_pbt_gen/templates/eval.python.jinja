@@ -6,144 +6,102 @@
 
 {% macro _eval_absence(monitor) -%}
 {% if monitor.has_scope_timeout %}
-if scope_time >= {{ monitor.scope_timeout }}:
+if scope_clock >= {{ monitor.scope_timeout }}:
     break # to the next scope
 {% endif %}
-{{ _chunk_contains(monitor.behaviour) }}
+{{ _check_event(monitor.behaviour) }}
 if found:
     return False
 {%- endmacro %}
 
 
-
 {% macro _eval_existence(monitor) -%}
 {% if monitor.has_scope_timeout %}
-if scope_time >= {{ monitor.scope_timeout }}:
+if scope_clock >= {{ monitor.scope_timeout }}:
     return False
 {% endif %}
-{{ _chunk_contains(monitor.behaviour) }}
+{{ _check_event(monitor.behaviour) }}
 if found:
     break
 {%- endmacro %}
 
 
-
 {% macro _eval_precedence(monitor) -%}
 {% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
 {% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
-for msg, topic in chunk.messages:
-    if topic == "{{ b.topic }}"{{ rv.inline_conditions(b.conditions) }}:
-        safe = False
-        b_msg = msg
+if topic == "{{ b.topic }}"{{ rv.inline_conditions(b.conditions) }}:
+    b_msg = msg
 {% if a.has_log_age %}
-        clock = 0.0
+    clock = 0.0
 {% endif %}
-        for msg, topic in chunk.messages:
-            if topic == "{{ a.topic }}"{# -#}
-                    {{ rv.inline_conditions(a.conditions) }}:
-{% if b.dep_conditions.get(a.key()) %}
-    {% if a.saved_vars %}
-                entry = scope
-        {% for key, msg_field in a.saved_vars.iteritems() %}
-                scope.state[{{ key }}] = msg.{{ msg_field }}
-        {% endfor %}
-    {% endif %}
-                if True{{ rv.inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
-                    safe = True
-                    break
-{% else %}
-                safe = True
-                break
-{% endif %}
-        if safe:
-            continue # stop searching the past
-        for j in range(i - 1, -1, -1):
-            chunk2 = scope.chunks[j]
+    for j in range(i - 1, -1, -1):
+        event2 = scope.events[j]
 {% if a.has_log_age %}
-            clock += scope.chunks[j+1]._delta_time
-            if clock > {{ a.log_age }}:
-                return False
-{% endif %}
-            for msg, topic in chunk2.messages:
-                if topic == "{{ a.topic }}"{# -#}
-                        {{ rv.inline_conditions(a.conditions) }}:
-{% if b.dep_conditions.get(a.key()) %}
-    {% if a.saved_vars %}
-                    entry = scope
-        {% for key, msg_field in a.saved_vars.iteritems() %}
-                    scope.state[{{ key }}] = msg.{{ msg_field }}
-        {% endfor %}
-    {% endif %}
-                    if True{# -#}
-                    {{ rv.inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
-                        safe = True
-                        break
-{% else %}
-                    safe = True
-                    break
-{% endif %}
-            if safe:
-                break # stop searching the past
-        else:
+        clock += scope.events[j+1].timestamp / 1000.0
+        if clock > {{ a.log_age }}:
             return False
+{% endif %}
+        if event2.topic == "{{ a.topic }}"{# -#}
+                {{ rv.inline_conditions(a.conditions) }}:
+{% if b.dep_conditions.get(a.key()) %}
+    {% if a.saved_vars %}
+            entry = scope
+        {% for key, msg_field in a.saved_vars.items() %}
+            scope.state[{{ key }}] = msg.{{ msg_field }}
+        {% endfor %}
+    {% endif %}
+            if True{# -#}
+            {{ rv.inline_conditions(b.get_dep_conditions(a.key()), msg='b_msg') }}:
+                break # stop searching the past
+{% else %}
+            break # stop searching the past
+{% endif %}
+    else:
+        return False
 {%- endmacro %}
-
 
 
 {% macro _eval_response(monitor) -%}
 {% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
 {% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
-for msg, topic in chunk.messages:
-    if topic == "{{ a.topic }}"{{ rv.inline_conditions(a.conditions) }}:
-{% if a.saved_vars %}
-    {% for key, msg_field in a.saved_vars.iteritems() %}
-        scope.state[{{ key }}] = msg.{{ msg_field }}
-    {% endfor %}
-{% endif %}
+{{ _check_event(monitor.trigger) }}
+if found:
 {% if b.is_under_timer %}
-        clock = -chunk._delta_time
+    clock = 0.0
 {% endif %}
-        for j in range(i, len(scope.chunks)):
-            chunk2 = scope.chunks[j]
+    for j in range(i+1, len(scope.events)):
+        event2 = scope.events[j]
 {% if b.is_under_timer %}
-            clock += chunk2._delta_time
-            if clock > {{ a.external_timer }}:
-                return False
-{% endif %}
-            for msg, topic in chunk2.messages:
-                if topic == "{{ b.topic }}"{# -#}
-                        {{ rv.inline_conditions(b.conditions) }}:
-                    break
-        else:
+        clock += event2.timestamp / 1000.0
+        if clock > {{ a.external_timer }}:
             return False
+{% endif %}
+        if event2.topic == "{{ b.topic }}"{# -#}
+                {{ rv.inline_conditions(b.conditions, msg='event2.msg') }}:
+            break # stop searching the future
+    else:
+        return False
 {%- endmacro %}
-
 
 
 {% macro _eval_prevention(monitor) -%}
 {% set a = monitor.trigger.events[0] %}{# FIXME: this is a hammer #}
 {% set b = monitor.behaviour.events[0] %}{# FIXME: this is a hammer #}
-for msg, topic in chunk.messages:
-    if topic == "{{ a.topic }}"{{ rv.inline_conditions(a.conditions) }}:
-{% if a.saved_vars %}
-    {% for key, msg_field in a.saved_vars.iteritems() %}
-        scope.state[{{ key }}] = msg.{{ msg_field }}
-    {% endfor %}
-{% endif %}
+{{ _check_event(monitor.trigger) }}
+if found:
 {% if b.is_under_timer %}
-        clock = 0.0
+    clock = 0.0
 {% endif %}
-        for j in range(i + 1, len(scope.chunks)):
-            chunk2 = scope.chunks[j]
+    for j in range(i + 1, len(scope.events)):
+        event2 = scope.events[j]
 {% if b.is_under_timer %}
-            clock += chunk2._delta_time
-            if clock > {{ a.external_timer }}:
-                break
+        clock += event2.timestamp / 1000.0
+        if clock > {{ a.external_timer }}:
+            break # stop searching the future
 {% endif %}
-            for msg, topic in chunk2.messages:
-                if topic == "{{ b.topic }}"{# -#}
-                        {{ rv.inline_conditions(b.conditions) }}:
-                    return False
+        if event2.topic == "{{ b.topic }}"{# -#}
+                {{ rv.inline_conditions(b.conditions, msg='event2.msg') }}:
+            return False
 {%- endmacro %}
 
 
@@ -160,30 +118,33 @@ for msg, topic in chunk.messages:
 {%- endmacro %}
 
 
-{% macro _chunk_contains(event) -%}
+{% macro _check_event(event, var_topic='topic', var_msg='msg') -%}
 {% set event = event.events[0] %}{# FIXME: this is a hammer -#}
 found = False
-for msg, topic in chunk.messages:
-    if topic == "{{ event.topic }}"{{ rv.inline_conditions(event.conditions) }}:
-        found = True
+if {{ var_topic }} == "{{ event.topic }}"{# -#}
+        {{ rv.inline_conditions(event.conditions, msg=var_msg) }}:
+    found = True
 {% if event.saved_vars %}
-    {% for key, msg_field in event.saved_vars.iteritems() %}
-        scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% for key, msg_field in event.saved_vars.items() %}
+    scope.state[{{ key }}] = msg.{{ msg_field }}
+    {% else %}
+    # no variables to save
     {% endfor %}
 {% endif %}
-        break
 {%- endmacro %}
 
 
 {% macro _eval_scope(monitor, first=true) -%}
-{% if first %}
-scope_clock = 0.0 if not scope.chunks else -scope.chunks[0]._delta_time
-{% else %}
 scope_clock = 0.0
+{% if first %}
+if scope.events:
+    scope_clock -= scope.events[0].timestamp / 1000.0
 {% endif %}
-for i in range(len(scope.chunks)):
-    chunk = scope.chunks[i]
-    scope_clock += chunk._delta_time
+for i in range(len(scope.events)):
+    event = scope.events[i]
+    msg = event.msg
+    topic = event.topic
+    scope_clock += event.timestamp / 1000.0
 {% if monitor.is_absence %}
 {{ _eval_absence(monitor)|indent(width=4, first=true) }}
 {% elif monitor.is_existence %}
@@ -203,29 +164,29 @@ else:
 
 
 {% macro _globally(monitor) -%}
-e = scope = EvalScope(trace.chunks, {{ _initial_state(monitor) }})
+e = scope = EvalScope(trace.events, {{ _initial_state(monitor) }})
 {{ _eval_scope(monitor, first=false) }}
 {%- endmacro %}
 
 {% macro _after_p(monitor) -%}
 e = scope = EvalScope([], {{ _initial_state(monitor) }})
-for i in range(len(trace.chunks)):
-    chunk = trace.chunks[i]
-{{ _chunk_contains(monitor.activator)|indent(width=4, first=true) }}
+for i in range(len(trace.events)):
+    event = trace.events[i]
+{{ _check_event(monitor.activator)|indent(width=4, first=true) }}
     if found:
-        scope.chunks.extend(trace.chunks[i:])
+        scope.events.extend(trace.events[i:])
         break
 {{ _eval_scope(monitor, first=true) }}
 {%- endmacro %}
 
 {% macro _until_q(monitor) -%}
-e = scope = EvalScope(trace.chunks, {{ _initial_state(monitor) }})
-for i in range(len(trace.chunks)):
-    chunk = trace.chunks[i]
-{{ _chunk_contains(monitor.terminator)|indent(width=4, first=true) }}
+e = scope = EvalScope([], {{ _initial_state(monitor) }})
+for i in range(len(trace.events)):
+    event = trace.events[i]
+{{ _check_event(monitor.terminator)|indent(width=4, first=true) }}
     if found:
-        scope = trace.chunks[:i]
         break
+    scope.events.append(event)
 {{ _eval_scope(monitor, first=false) }}
 {%- endmacro %}
 
@@ -233,18 +194,18 @@ for i in range(len(trace.chunks)):
 scopes = []
 j = -1
 scope = EvalScope([], {{ _initial_state(monitor) }})
-for i in range(len(trace.chunks)):
-{{ _chunk_contains(monitor.activator)|indent(width=4, first=true) }}
+for i in range(len(trace.events)):
+{{ _check_event(monitor.activator)|indent(width=4, first=true) }}
     if j < 0 and found:
         j = i
-{{ _chunk_contains(monitor.terminator)|indent(width=4, first=true) }}
+{{ _check_event(monitor.terminator)|indent(width=4, first=true) }}
     if j >= 0 and found:
-        scope.chunks.extend(trace.chunks[j:i])
+        scope.events.extend(trace.events[j:i])
         scopes.append(scope)
         scope = EvalScope([], {{ _initial_state(monitor) }})
         j = -1
 if j >= 0:
-    scope.chunks.extend(trace.chunks[j:])
+    scope.events.extend(trace.events[j:])
     scopes.append(scope)
 for scope in scopes:
     e = scope
