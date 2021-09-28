@@ -1,6 +1,22 @@
 {% import 'default_msg_strategies.python.jinja' as msgs %}
 
 {% set TIME_INF = 1000 %}
+{% set MAX_SPAM = 3 %}
+
+{% macro _ordinal(n) -%}
+  {% if n == 11 or n == 12 or n == 13 -%}
+    {{ n }}th
+  {%- elif n % 10 == 1 -%}
+    {{ n }}st
+  {%- elif n % 10 == 2 -%}
+    {{ n }}nd
+  {%- elif n % 10 == 3 -%}
+    {{ n }}rd
+  {%- else -%}
+    {{ n }}th
+  {%- endif %}
+{%- endmacro %}
+
 
 {# Generation of Random messages. #}
 {% macro _gen_spam(spam) -%}
@@ -172,8 +188,139 @@ if triggers:
 
 
 
-{% macro _trace_segment(segment) -%}
-# -- new trace segment --
+
+{# Generates a message, given a message strategy. #}
+{% macro _gen_msg(msg_strategy) -%}
+{% if msg_strategy.is_default %}
+    {% set fun = msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) %}
+    {% set args = '' %}
+{% else %}
+    {% set fun = msg_strategy.name %}
+    {% set args = msg_strategy.args|join(', ') %}
+{% endif %}
+msg = draw({{ fun }}({{ args }}))
+{% if msg_strategy.alias %}
+msg_{{ msg_strategy.alias }} = msg
+{% endif %}
+{%- endmacro %}
+
+
+{# FIXME: this should be `strategies.one_of`, but we must fix the args #}
+{% macro _spam_union_strategy(spam_strategies) -%}
+spam_strategies = (
+{# go for defaults first #}
+{% for msg_strategy in spam_strategies %}
+  {% if msg_strategy.is_default %}
+    {{ msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) }},
+  {% endif %}
+{% endfor %}
+{# then go for custom msgs #}
+{% for msg_strategy in spam_strategies %}
+  {% if not msg_strategy.is_default %}
+    {{ msg_strategy.name }},
+  {% endif %}
+{% endfor %}
+)
+n = draw(strategies.integers(min_value=0, max_value={{ MAX_SPAM + 1 }}))
+for i in range(n):
+    k
+{%- endmacro %}
+
+
+{#
+  Generates spam events.
+  Builds a list of messages and then gradually "spends" the
+    available time between the previous and the next mandatory events.
+#}
+{% macro _gen_spam_events(spam_strategies, i) -%}
+# ---- spam events ----
+{% if len(spam_strategies) == 0 -%}
+# There are no spam events.
+{%- elif len(spam_strategies) == 1 -%}
+{# TODO #}
+{%- else -%}
+{# TODO #}
+{%- endif %}
+{%- endmacro %}
+
+
+{#
+  Generates mandatory events.
+  First event uses the generated timestamp.
+  Further events are placed at +0 from the first one,
+#}
+{% macro _gen_mandatory_events(published, i) -%}
+# ---- mandatory events ----
+{% for msg_strategy in published %}
+{{ _gen_msg(msg_strategy) }}
+  {% if loop.first %}
+rec = MsgRecord('{{ msg_strategy.topic }}', timestamps[{{ i }}], msg)
+  {% else %}
+rec = MsgRecord('{{ msg_strategy.topic }}', 0, msg)
+  {% endif %}
+trace.append(rec)
+{% else %}
+# There are not mandatory events.
+{% endfor %}
+{%- endmacro %}
+
+
+{#
+  Generates a strategy for a timestamp, given lower and upper bounds.
+  Unbounded intervals are limited to a default upper bound.
+  Optimization: sample only from a few key values in the interval.
+
+  TODO: options to control sampling granularity.
+#}
+{% macro _gen_timestamp(segment) -%}
+{% if segment.is_bounded -%}
+    {% set max_time = segment.upper_bound %}
+{%- elif segment.lower_bound >= TIME_INF -%}
+    {% set max_time = 2 * segment.lower_bound %}
+{%- else -%}
+    {% set max_time = TIME_INF %}
+{%- endif %}
+{% set delta = max_time - segment.lower_bound %}
+{% if delta <= 1 -%}
+timestamp = {{ segment.lower_bound }}
+{%- else -%}
+timestamp = draw(strategies.sampled_from(({# -#}
+    {{ segment.lower_bound }}, {# -#}
+    {% if delta > 2 -%}
+    {{ segment.lower_bound + (delta // 2) }}, {# -#}
+    {%- endif %}
+    {{ max_delay - 1 }}{# -#}
+)))
+{%- endif %}
+{%- endmacro %}
+
+{#
+  Generation of mandatory and spam events.
+  Places generated messages in the trace, in order.
+  Assumes that mandatory timestamps have been pre-generated.
+#}
+{% macro _handle_segments(segments) -%}
+{% for segment in segments %}
+# ---- {{ _ordinal(loop.index) }} trace segment ----
+{{ _gen_mandatory_events(segment.published, loop.index0) }}
+{{ _gen_spam_events(segment.spam.values(), loop.index0) }}
+{% endfor %}
+{%- endmacro %}
+
+
+{#
+  Allocation of mandatory timestamps.
+  One timestamp per schema time interval, plus an 'infinity' at the end.
+  The additional timestamp is required for spam placement.
+#}
+{% macro _allocate_timestamps(segments) -%}
+# ---- timestamp allocation ----
+timestamps = []
+{% for segment in segments %}
+{{ _gen_timestamp(segment) }}
+timestamps.append(timestamp)
+{% endfor %}
+timestamps.append({{ TIME_INF }})
 {%- endmacro %}
 
 
@@ -209,8 +356,7 @@ if triggers:
 @strategies.composite
 def schema_{{ schema.name }}(draw):
     trace = []
-    {% for segment in schema.segments %}
-{{ _trace_segment(segment)|indent(4, first=true) }}
-    {% endfor %}
+{{ _allocate_timestamps(schema.segments)|indent(4, first=true) }}
+{{ _handle_segments(schema.segments)|indent(4, first=true) }}
     return trace
 {% endfor %}
