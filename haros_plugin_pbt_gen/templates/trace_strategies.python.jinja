@@ -156,7 +156,7 @@ timestamp = draw(strategies.sampled_from(({# -#}
 {##############################################################################}
 
 {% macro _spam_name(schema, i) -%}
-spam_{{ schema.name }}_{{ loop.index0 }}
+spam_{{ schema.name }}_{{ i }}
 {%- endmacro %}
 
 {% macro _unified_spam_strategies(schema) %}
