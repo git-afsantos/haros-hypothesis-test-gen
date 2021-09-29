@@ -393,7 +393,7 @@ class TestGenerator(object):
             "pkg_imports": test_template.pkg_imports,
             "default_msg_strategies": test_template.default_msg_strategies,
             "custom_msg_strategies": test_template.custom_msg_strategies,
-            "trace_strategy": test_template.trace_strategy,
+            "trace_strategies": test_template.trace_strategies,
             "monitors": test_template.monitor_templates,
             "axioms": [m.python for m in axioms],
             "eval_functions": [m.python_eval for m in axioms],
