@@ -33,6 +33,10 @@ class StrategyError(Exception):
             str_type = " ({}.msg)".format(ros_type.type_name)
         return cls('unsatisfiable predicate{}{}'.format(str_topic, str_type))
 
+    @classmethod
+    def not_open_sub(cls, topic):
+        return cls('not an open subscribed topic: ' + topic)
+
 
 FakeSet = namedtuple("HplSet", ("values", "is_set", "is_range"))
 

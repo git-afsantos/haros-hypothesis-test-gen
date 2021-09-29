@@ -225,7 +225,10 @@ class TraceSegmentBuilder(object):
         strategies = []
         for i in range(len(self.publish_events)):
             pe = self.publish_events[i]
-            ros_type, assumed = all_topics[pe.topic]
+            try:
+                ros_type, assumed = all_topics[pe.topic]
+            except KeyError:
+                raise StrategyError.not_open_sub(pe.topic)
             version = '{}_{}p'.format(name, i)
             builder = MessageStrategyBuilder(pe.topic, ros_type, ver=version)
             builder.assume(assumed)
