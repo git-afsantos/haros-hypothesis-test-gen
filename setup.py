@@ -46,7 +46,7 @@ setup(
         "hypothesis>=4.0.0,<5.0.0",
         "ros-type-tokens",
         "hpl-specs",
-        "hpl-rv-gen",
+        "hpl-rv-gen>=0.2.0,<1.0.0",
         "rospy",
     ],
     zip_safe = False
