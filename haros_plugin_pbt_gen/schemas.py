@@ -354,12 +354,13 @@ class TestSchemaBuilder(object):
     def forbid(self, topic, predicate):
         self.segments[-1].forbid(topic, predicate)
 
-    def build(self, all_topics, inf=INT_INF):
+    def build(self, all_topics, alias_types, inf=INT_INF):
         # all_topics: {topic: (ros_type, assumption)}
+        # alias_types: {alias: ros_type}
         schema = []
         for i in range(len(self.segments)):
             segment_name = '{}_{}'.format(self.name, i)
-            schema.append(self.segments[i].build(all_topics,
+            schema.append(self.segments[i].build(all_topics, alias_types,
                 inf=inf, name=segment_name))
         return SchemaInfo(self.name, schema, str(self))
 
@@ -415,7 +416,7 @@ class TraceSegmentBuilder(object):
     def forbid(self, topic, predicate):
         self.forbid_events.append(self.MsgEvent(topic, predicate, None))
 
-    def event_strategies(self, all_topics, name='segment'):
+    def event_strategies(self, all_topics, alias_types, name='segment'):
         # all_topics: {topic: (ros_type, assumption)}
         strategies = []
         for i in range(len(self.publish_events)):
@@ -427,11 +428,11 @@ class TraceSegmentBuilder(object):
             version = '{}_{}p'.format(name, i)
             builder = MessageStrategyBuilder(pe.topic, ros_type, ver=version)
             builder.assume(assumed)
-            strategies.append(builder.build(
+            strategies.append(builder.build(alias_types,
                 predicate=pe.predicate, alias=pe.alias))
         return strategies
 
-    def spam_strategies(self, all_topics, name='segment'):
+    def spam_strategies(self, all_topics, alias_types, name='segment'):
         # all_topics: {topic: (ros_type, assumption)}
         strategies = {}
         i = 0
@@ -445,18 +446,18 @@ class TraceSegmentBuilder(object):
                 if e.topic == topic:
                     builder.assume(e.predicate.negate())
             try:
-                strategies[topic] = builder.build()
+                strategies[topic] = builder.build(alias_types)
             except ContradictionError:
                 pass
         return strategies
 
-    def build(self, all_topics, inf=INT_INF, name='segment'):
+    def build(self, all_topics, alias_types, inf=INT_INF, name='segment'):
         try:
             return TraceSegment(
                 self.lower_bound,
                 self.upper_bound if self.is_bounded else inf,
-                self.event_strategies(all_topics, name=name),
-                self.spam_strategies(all_topics, name=name),
+                self.event_strategies(all_topics, alias_types, name=name),
+                self.spam_strategies(all_topics, alias_types, name=name),
                 self.is_single_instant,
                 self.is_bounded
             )
@@ -509,7 +510,7 @@ class MessageStrategyBuilder(object):
     def assume(self, predicate):
         self.predicate = self.predicate.join(predicate)
 
-    def build(self, predicate=None, alias=None):
+    def build(self, alias_types, predicate=None, alias=None):
         phi = self.predicate
         if predicate is not None:
             phi = predicate.join(phi)
@@ -522,7 +523,7 @@ class MessageStrategyBuilder(object):
                     self.topic, self.ros_type))
         # FIXME remove this and remake the strategy generator
         conditions = convert_to_old_format(phi.condition)
-        strategy = self._msg_generator(self.ros_type, conditions)
+        strategy = self._msg_generator(self.ros_type, conditions, alias_types)
         name = '{}_{}_{}'.format(self.ros_type.package,
             self.ros_type.message, self.version)
         return MsgStrategy(name, strategy.args, self.ros_type.package,
@@ -533,7 +534,7 @@ class MessageStrategyBuilder(object):
             (), self.ros_type.package, self.ros_type.message,
             (), True, self.topic, None)
 
-    def _msg_generator(self, type_token, conditions):
+    def _msg_generator(self, type_token, conditions, alias_types):
         strategy = MessageStrategyGenerator(type_token)
         for condition in conditions:
             # FIXME Selector should accept AST nodes instead of strings
@@ -544,17 +545,17 @@ class MessageStrategyBuilder(object):
             selector = Selector(str(x), type_token)
             strategy.ensure_generator(selector)
         for condition in conditions:
-            self._set_condition(strategy, condition, type_token)
+            self._set_condition(strategy, condition, type_token, alias_types)
         return strategy
 
-    def _set_condition(self, strategy, condition, type_token):
+    def _set_condition(self, strategy, condition, type_token, alias_types):
         operand1 = condition.operand1
         if operand1.is_function_call:
             assert operand1.function == 'len', 'function: ' + operand1.function
-            return self._set_attr_condition(strategy, condition, type_token)
+            return self._set_attr_condition(strategy, condition, type_token, alias_types)
         selector = Selector(str(operand1), type_token)
         try:
-            value = self._value(condition.operand2, strategy, type_token)
+            value = self._value(condition.operand2, strategy, type_token, alias_types)
         except KeyError as e:
             return
         if condition.operator == '=':
@@ -582,13 +583,13 @@ class MessageStrategyBuilder(object):
             else:
                 strategy.set_in(selector, value)
 
-    def _set_attr_condition(self, strategy, condition, type_token):
+    def _set_attr_condition(self, strategy, condition, type_token, alias_types):
         operand1 = condition.operand1
         assert operand1.is_function_call and operand1.function == 'len'
         attr = operand1.function
         selector = Selector(str(operand1.arguments[0]), type_token)
         try:
-            value = self._value(condition.operand2, strategy, type_token)
+            value = self._value(condition.operand2, strategy, type_token, alias_types)
         except KeyError as e:
             return
         if condition.operator == '=':
@@ -617,12 +618,12 @@ class MessageStrategyBuilder(object):
                 assert False
                 # strategy.set_in(selector, value)
 
-    def _value(self, expr, strategy, type_token):
+    def _value(self, expr, strategy, type_token, alias_types):
         if expr.is_accessor:
             msg = expr.base_message()
             if not msg.is_this_msg:
                 assert msg.is_variable
-                type_token = self.types_by_message[msg.name]
+                type_token = alias_types[msg.name]
             # check for constants
             if expr.is_field and expr.message.is_value:
                 ros_literal = type_token.constants.get(expr.field)
@@ -647,9 +648,9 @@ class MessageStrategyBuilder(object):
             else:
                 return expr.value
         if expr.is_range:
-            return (self._value(expr.min_value, strategy, type_token),
-                    self._value(expr.max_value, strategy, type_token))
+            return (self._value(expr.min_value, strategy, type_token, alias_types),
+                    self._value(expr.max_value, strategy, type_token, alias_types))
         if expr.is_set:
-            return tuple(self._value(v, strategy, type_token)
+            return tuple(self._value(v, strategy, type_token, alias_types)
                          for v in expr.values)
         raise StrategyError('unknown value type: ' + repr(expr))
