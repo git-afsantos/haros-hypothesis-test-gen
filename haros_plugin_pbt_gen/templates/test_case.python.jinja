@@ -158,9 +158,14 @@ def _test_hypothesis_properties(self, trace):
             time_prev = time_now
         self.trace_done = True
         self._check_status()
-        self._update()
-        assert mon.verdict is not False, mon.HPL_PROPERTY
+        time_now = get_time()
+        self._update(time_now=time_now)
         # self._check_outcome(trace)
+        while time_now < self.deadline:
+            rate.sleep()
+            time_now = get_time()
+            self._update(time_now=time_now)
+        assert mon.verdict is not False, mon.HPL_PROPERTY
         passed = True
         print("[Example #{}]: OK".format(self.n_examples))
     except AssertionError as e:
