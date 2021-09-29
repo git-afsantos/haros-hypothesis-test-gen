@@ -145,7 +145,7 @@ timestamp = draw(strategies.sampled_from(({# -#}
     {% if delta > 2 -%}
     {{ segment.lower_bound + (delta // 2) }}, {# -#}
     {%- endif %}
-    {{ max_delay - 1 }}{# -#}
+    {{ max_time - 1 }}{# -#}
 )))
 {%- endif %}
 {%- endmacro %}
