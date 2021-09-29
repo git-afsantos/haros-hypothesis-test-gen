@@ -274,7 +274,8 @@ class TestTracer(unittest.TestCase):
         passed = False
         self.n_examples += 1
         self._setup_test()
-        print("[Example #{}]: Selected schema #{}".format(trace.schema))
+        print("[Example #{}]: Selected schema #{}".format(
+            self.n_examples, trace.schema))
         print("[Example #{}]: Launching SUT...".format(self.n_examples))
         self._setup_sut()
         self.trace_done = False
