@@ -505,11 +505,11 @@ class StrategyManager(object):
         self.deadline = deadline
 
     def build_strategies(self, prop):
-        builders = schemas_for_property(prop)
-        # inf=INT_INF, unroll=0
+        builders = schemas_for_property(prop) # unroll=0
         # all_topics: {topic: (ros_type, assumption predicate)}
         # inf: int >= 0 (value to replace infinity with)
         #      int < 0 (treat infinity as unbounded/max. int)
+        # deadline = int(self.deadline * 1000) # in milliseconds
         schemas = [b.build(self.open_topics) for b in builders]
         # schemas: [SchemaInfo]
         # SchemaInfo: (name, [TraceSegment], string)
