@@ -207,7 +207,7 @@ def _unroll_1_response(prop):
     _ensure_event(prop.pattern.trigger, t, INF, new)
     _avoid_event(prop.pattern.trigger, new)
     _avoid_event(prop.scope.terminator, new)
-    _ensure_event(prop.scope.terminator, t, INF new)
+    _ensure_event(prop.scope.terminator, t, INF, new)
     builders.extend(new)
     # renaming
     for i in range(len(builders)):
