@@ -117,12 +117,27 @@ def _setup_sut(self):
 
 
 {% macro _test_hypothesis(settings, schemas) %}
-def _test_hypothesis_properties(self):
 {% set n = schemas|length %}
+def _test_hypothesis_properties(self):
+    if mode_random:
+        self._test_random_schema()
+    else:
 {% for schema in schemas %}
-    print("[Testing Schema {{ loop.index }}/{{ n }}]")
-    self._test_schema_{{ schema.name }}()
+        print("[Testing Schema {{ loop.index }}/{{ n }}]")
+        self._test_schema_{{ schema.name }}()
 {% endfor %}
+
+@settings(
+    max_examples={{ settings['max_examples']|d(100, true) * n }},
+    deadline=None,
+    suppress_health_check=(
+        HealthCheck.filter_too_much,
+        HealthCheck.too_slow,
+    )
+)
+@given(trace=traces)
+def _test_random_schema(self, trace):
+    self._run_example(trace)
 {% for schema in schemas %}
 
 @settings(

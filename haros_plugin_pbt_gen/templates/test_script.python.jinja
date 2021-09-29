@@ -308,11 +308,16 @@ class TestSubscriber(object):
 # Entry Point
 ################################################################################
 
-def main():
+mode_random = False
+
+def main(args):
     # {{ property_text }}
     rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
+    if args and args[0] == 'random':
+        global mode_random
+        mode_random = True
     unittest.main(module=__name__, argv=[__name__], exit=False)
     sys.stdout.flush()
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
