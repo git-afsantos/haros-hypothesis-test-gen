@@ -210,13 +210,15 @@ spam_{{ schema.name }}_{{ i }}
 
 class Trace(object):
     __slots__ = (
+        'schema', # int
         'events', # [MsgRecord]
 {% for alias in aliases %}
         'msg_{{ alias }}', # MsgRecord
 {% endfor %}
     )
 
-    def __init__(self, events=None):
+    def __init__(self, events=None, schema=None):
+        self.schema = schema
         self.events = events if events is not None else []
 {% for alias in aliases %}
         self.msg_{{ alias }} = None
@@ -251,7 +253,8 @@ class Trace(object):
         return '\n'.join(parts)
 
     def __repr__(self):
-          return "Trace(events={})".format(repr(self.events))
+        return "Trace(events={!r}, schema={!r})".format(
+            self.events, self.schema)
 
 {% for schema in schemas %}
 
@@ -265,7 +268,7 @@ class Trace(object):
 '''
 @strategies.composite
 def schema_{{ schema.name }}(draw):
-    trace = Trace()
+    trace = Trace(schema={{ loop.index }})
 {{ _allocate_timestamps(schema)|indent(4, first=true) }}
 {{ _handle_segments(schema)|indent(4, first=true) }}{#- #}
     return trace
