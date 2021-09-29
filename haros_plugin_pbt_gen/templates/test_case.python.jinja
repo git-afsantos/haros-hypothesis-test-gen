@@ -125,7 +125,7 @@ def _setup_sut(self):
         HealthCheck.too_slow,
     )
 )
-@given(trace=traces())
+@given(trace=traces)
 def _test_hypothesis_properties(self, trace):
     if rospy.is_shutdown():
         return
