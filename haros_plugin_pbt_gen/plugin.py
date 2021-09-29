@@ -505,7 +505,7 @@ class StrategyManager(object):
         self.deadline = deadline
 
     def build_strategies(self, prop):
-        builders = schemas_for_property(prop) # unroll=0
+        builders = schemas_for_property(prop, unroll=1)
         # all_topics: {topic: (ros_type, assumption predicate)}
         # inf: int >= 0 (value to replace infinity with)
         #      int < 0 (treat infinity as unbounded/max. int)
