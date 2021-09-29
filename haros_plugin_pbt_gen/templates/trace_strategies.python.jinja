@@ -48,15 +48,16 @@
 {% macro _gen_mandatory_events(published, i) -%}
 # ---- mandatory events ----
 {% for msg_strategy in published %}
-{{ _gen_msg(msg_strategy) }}
+{{ _gen_msg(msg_strategy) }}{# -#}
   {% if loop.first %}
 rec = MsgRecord('{{ msg_strategy.topic }}', timestamps[{{ i }}], msg)
   {% else %}
 rec = MsgRecord('{{ msg_strategy.topic }}', 0, msg)
   {% endif %}
-trace.append(rec)
+{# -#}
+trace.append(rec){# -#}
 {% else %}
-# There are not mandatory events.
+# There are no mandatory events.{# -#}
 {% endfor %}
 {%- endmacro %}
 
@@ -69,7 +70,7 @@ trace.append(rec)
 {% macro _gen_spam_events(spam_strategies, schema, i) -%}
 # ---- spam events ----
 {% if spam_strategies|length == 0 -%}
-# There are no spam events.
+# There are no spam events.{# -#}
 {%- else -%}
 n = draw(strategies.integers(min_value=0, max_value={{ MAX_SPAM }}))
 while n > 0:
@@ -83,7 +84,7 @@ while n > 0:
     rec = MsgRecord(topic, timestamp, msg)
     trace.append(rec)
     n -= 1
-{%- endif %}
+{%- endif %}{# -#}
 {%- endmacro %}
 
 
@@ -95,9 +96,9 @@ while n > 0:
     {% set fun = msg_strategy.name %}
 {% endif %}
 msg = draw({{ fun }}(trace=trace))
-{% if msg_strategy.alias %}
+{% if msg_strategy.alias -%}
 trace.msg_{{ msg_strategy.alias }} = msg
-{% endif %}
+{%- endif %}
 {%- endmacro %}
 
 
@@ -144,7 +145,7 @@ timestamp = draw(strategies.sampled_from(({# -#}
     {{ segment.lower_bound }}, {# -#}
     {% if delta > 2 -%}
     {{ segment.lower_bound + (delta // 2) }}, {# -#}
-    {%- endif %}
+    {%- endif -%}
     {{ max_time - 1 }}{# -#}
 )))
 {%- endif %}
@@ -251,7 +252,6 @@ class Trace(object):
     def __repr__(self):
           return "Trace(events={})".format(repr(self.events))
 
-
 {% for schema in schemas %}
 
 ################################################################################
@@ -259,7 +259,6 @@ class Trace(object):
 ################################################################################
 
 {{ _unified_spam_strategies(schema) }}
-
 '''
 {{ schema.text }}
 '''
@@ -267,7 +266,7 @@ class Trace(object):
 def schema_{{ schema.name }}(draw):
     trace = Trace()
 {{ _allocate_timestamps(schema)|indent(4, first=true) }}
-{{ _handle_segments(schema)|indent(4, first=true) }}
+{{ _handle_segments(schema)|indent(4, first=true) }}{#- #}
     return trace
 {% endfor %}
 

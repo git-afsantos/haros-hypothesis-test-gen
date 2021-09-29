@@ -120,7 +120,10 @@ def _setup_sut(self):
 @settings(
     max_examples={{ settings['max_examples']|d(100, true) }},
     deadline=None,
-    suppress_health_check=(HealthCheck.filter_too_much, HealthCheck.too_slow)
+    suppress_health_check=(
+        HealthCheck.filter_too_much,
+        HealthCheck.too_slow,
+    )
 )
 @given(trace=traces())
 def _test_hypothesis_properties(self, trace):
