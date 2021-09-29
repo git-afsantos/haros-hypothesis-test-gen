@@ -168,19 +168,20 @@ def _unroll_1_response(prop):
     if not prop.pattern.has_max_time:
         return builders
     # 2nd trigger before timeout, terminator after timeout
-    new = [TestSchemaBuilder()]
-    _avoid_event(prop.scope.activator, new)
-    _ensure_event(prop.scope.activator, 0, INF, new)
-    _avoid_event(prop.pattern.trigger, new)
-    _avoid_event(prop.scope.terminator, new)
-    _ensure_event(prop.pattern.trigger, 0, INF, new)
-    _avoid_event(prop.pattern.trigger, new)
-    _avoid_event(prop.scope.terminator, new)
-    _ensure_event(prop.pattern.trigger, 0, t, new)
-    _avoid_event(prop.pattern.trigger, new)
-    _avoid_event(prop.scope.terminator, new)
-    _ensure_event(prop.scope.terminator, t, INF, new)
-    builders.extend(new)
+    if prop.scope.terminator is not None:
+        new = [TestSchemaBuilder()]
+        _avoid_event(prop.scope.activator, new)
+        _ensure_event(prop.scope.activator, 0, INF, new)
+        _avoid_event(prop.pattern.trigger, new)
+        _avoid_event(prop.scope.terminator, new)
+        _ensure_event(prop.pattern.trigger, 0, INF, new)
+        _avoid_event(prop.pattern.trigger, new)
+        _avoid_event(prop.scope.terminator, new)
+        _ensure_event(prop.pattern.trigger, 0, t, new)
+        _avoid_event(prop.pattern.trigger, new)
+        _avoid_event(prop.scope.terminator, new)
+        _ensure_event(prop.scope.terminator, t, INF, new)
+        builders.extend(new)
     # 2nd trigger after timeout, terminator before timeout
     new = [TestSchemaBuilder()]
     _avoid_event(prop.scope.activator, new)
@@ -196,19 +197,20 @@ def _unroll_1_response(prop):
     _ensure_event(prop.scope.terminator, 0, t, new)
     builders.extend(new)
     # 2nd trigger after timeout, terminator after timeout
-    new = [TestSchemaBuilder()]
-    _avoid_event(prop.scope.activator, new)
-    _ensure_event(prop.scope.activator, 0, INF, new)
-    _avoid_event(prop.pattern.trigger, new)
-    _avoid_event(prop.scope.terminator, new)
-    _ensure_event(prop.pattern.trigger, 0, INF, new)
-    _avoid_event(prop.pattern.trigger, new)
-    _avoid_event(prop.scope.terminator, new)
-    _ensure_event(prop.pattern.trigger, t, INF, new)
-    _avoid_event(prop.pattern.trigger, new)
-    _avoid_event(prop.scope.terminator, new)
-    _ensure_event(prop.scope.terminator, t, INF, new)
-    builders.extend(new)
+    if prop.scope.terminator is not None:
+        new = [TestSchemaBuilder()]
+        _avoid_event(prop.scope.activator, new)
+        _ensure_event(prop.scope.activator, 0, INF, new)
+        _avoid_event(prop.pattern.trigger, new)
+        _avoid_event(prop.scope.terminator, new)
+        _ensure_event(prop.pattern.trigger, 0, INF, new)
+        _avoid_event(prop.pattern.trigger, new)
+        _avoid_event(prop.scope.terminator, new)
+        _ensure_event(prop.pattern.trigger, t, INF, new)
+        _avoid_event(prop.pattern.trigger, new)
+        _avoid_event(prop.scope.terminator, new)
+        _ensure_event(prop.scope.terminator, t, INF, new)
+        builders.extend(new)
     # renaming
     for i in range(len(builders)):
         builders[i].name = 'u1_schema' + str(i)
