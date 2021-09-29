@@ -116,7 +116,15 @@ def _setup_sut(self):
 {% endmacro %}
 
 
-{% macro _test_hypothesis(settings, is_liveness) %}
+{% macro _test_hypothesis(settings, schemas) %}
+def _test_hypothesis_properties(self):
+{% set n = schemas|length %}
+{% for schema in schemas %}
+    print("[Testing Schema {{ loop.index }}/{{ n }}]")
+    self._test_schema_{{ schema.name }}()
+{% endfor %}
+{% for schema in schemas %}
+
 @settings(
     max_examples={{ settings['max_examples']|d(100, true) }},
     deadline=None,
@@ -125,68 +133,10 @@ def _setup_sut(self):
         HealthCheck.too_slow,
     )
 )
-@given(trace=traces)
-def _test_hypothesis_properties(self, trace):
-    if rospy.is_shutdown():
-        return
-    self._eval_trace(trace)
-    passed = False
-    self.n_examples += 1
-    self._setup_test()
-    print("[Example #{}]: Launching SUT...".format(self.n_examples))
-    self._setup_sut()
-    self.trace_done = False
-    if rospy.is_shutdown():
-        return
-    try:
-        time_prev = get_time()
-        self._update(time_now=time_prev)
-        self.trace_start_time = time_prev
-        mon = self.main_monitor
-        rate = rospy.Rate(1000) # every 1 ms
-        for event in trace:
-            time_now = get_time()
-            if event.timestamp > 0:
-                time_target = time_prev + event.timestamp / 1000.0
-                while time_now < time_target:
-                    self._update(time_now=time_now)
-                    rate.sleep()
-                    time_now = get_time()
-            self._update(time_now=time_now)
-            self.pub_log.append(MsgRecord(event.topic, time_now, event.msg))
-            self.pubs[event.topic].publish(event.msg, time=time_now)
-            time_prev = time_now
-        self.trace_done = True
-        self._check_status()
-        time_now = get_time()
-        self._update(time_now=time_now)
-        # self._check_outcome(trace)
-        while time_now < self.deadline and mon.is_falsifiable_state:
-            rate.sleep()
-            time_now = get_time()
-            self._update(time_now=time_now)
-        assert mon.verdict is not False, mon.HPL_PROPERTY
-        passed = True
-        print("[Example #{}]: OK".format(self.n_examples))
-    except AssertionError as e:
-        raise e
-    except EarlySuccess:
-        passed = True
-        print("[Example #{}]: OK".format(self.n_examples))
-    finally:
-        self.times.append(get_time() - self.launch_time)
-        if self.assumptions_ok:
-            if not passed:
-                self.n_fail += 1
-                if self.first_fail is None:
-                    self.first_fail = self.n_examples
-                print("[Example #{}]: FAIL".format(self.n_examples))
-        else:
-            self.n_failed_assumptions += 1
-            print("[Example #{}]: INVALID".format(self.n_examples))
-        if self.witness is not None:
-            self._report_witness()
-        self._teardown_sut()
+@given(trace=schema_{{ schema.name }}())
+def _test_schema_{{ schema.name }}(self, trace):
+    self._run_example(trace)
+{% endfor %}
 {% endmacro %}
 
 
@@ -300,7 +250,69 @@ class TestTracer(unittest.TestCase):
                 print("Counterexample trace size: {} messages".format(
                     self.counterexample_size))
 
-{{ _test_hypothesis(settings, is_liveness)|indent(width=4, first=true) }}
+{{ _test_hypothesis(settings, schemas)|indent(width=4, first=true) }}
+
+    def _run_example(self, trace):
+        if rospy.is_shutdown():
+            return
+        self._eval_trace(trace)
+        passed = False
+        self.n_examples += 1
+        self._setup_test()
+        print("[Example #{}]: Launching SUT...".format(self.n_examples))
+        self._setup_sut()
+        self.trace_done = False
+        if rospy.is_shutdown():
+            return
+        try:
+            time_prev = get_time()
+            self._update(time_now=time_prev)
+            self.trace_start_time = time_prev
+            mon = self.main_monitor
+            rate = rospy.Rate(1000) # every 1 ms
+            for event in trace:
+                time_now = get_time()
+                if event.timestamp > 0:
+                    time_target = time_prev + event.timestamp / 1000.0
+                    while time_now < time_target:
+                        self._update(time_now=time_now)
+                        rate.sleep()
+                        time_now = get_time()
+                self._update(time_now=time_now)
+                self.pub_log.append(MsgRecord(event.topic, time_now, event.msg))
+                self.pubs[event.topic].publish(event.msg, time=time_now)
+                time_prev = time_now
+            self.trace_done = True
+            self._check_status()
+            time_now = get_time()
+            self._update(time_now=time_now)
+            # self._check_outcome(trace)
+            while time_now < self.deadline and mon.is_falsifiable_state:
+                rate.sleep()
+                time_now = get_time()
+                self._update(time_now=time_now)
+            assert mon.verdict is not False, mon.HPL_PROPERTY
+            passed = True
+            print("[Example #{}]: OK".format(self.n_examples))
+        except AssertionError as e:
+            raise e
+        except EarlySuccess:
+            passed = True
+            print("[Example #{}]: OK".format(self.n_examples))
+        finally:
+            self.times.append(get_time() - self.launch_time)
+            if self.assumptions_ok:
+                if not passed:
+                    self.n_fail += 1
+                    if self.first_fail is None:
+                        self.first_fail = self.n_examples
+                    print("[Example #{}]: FAIL".format(self.n_examples))
+            else:
+                self.n_failed_assumptions += 1
+                print("[Example #{}]: INVALID".format(self.n_examples))
+            if self.witness is not None:
+                self._report_witness()
+            self._teardown_sut()
 
 {{ _eval_trace(axioms)|indent(width=4, first=true) }}
 
