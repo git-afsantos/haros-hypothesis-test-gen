@@ -161,7 +161,7 @@ def _test_hypothesis_properties(self, trace):
         time_now = get_time()
         self._update(time_now=time_now)
         # self._check_outcome(trace)
-        while time_now < self.deadline:
+        while time_now < self.deadline and mon.is_falsifiable_state:
             rate.sleep()
             time_now = get_time()
             self._update(time_now=time_now)
