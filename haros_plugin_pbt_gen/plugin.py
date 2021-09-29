@@ -519,7 +519,8 @@ class StrategyManager(object):
         # inf: int >= 0 (value to replace infinity with)
         #      int < 0 (treat infinity as unbounded/max. int)
         # deadline = int(self.deadline * 1000) # in milliseconds
-        schemas = [b.build(self.open_topics, alias_types) for b in builders]
+        schemas = [b.build(self.open_topics, alias_types)
+                   for b in reversed(builders)]
         # schemas: [SchemaInfo]
         # SchemaInfo: (name, [TraceSegment], string)
         default_strategies = set()
