@@ -309,7 +309,7 @@ class MessageStrategyBuilder(object):
         return not self.predicate.is_vacuous or self.predicate.is_true
 
     def assume(self, predicate):
-        self.predicate = self.predicate.join(assumption.predicate)
+        self.predicate = self.predicate.join(predicate)
 
     def build(self, predicate=None, alias=None):
         phi = self.predicate
