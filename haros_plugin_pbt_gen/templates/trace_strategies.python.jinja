@@ -273,6 +273,6 @@ def schema_{{ schema.name }}(draw):
 
 traces = strategies.one_of((
 {% for schema in schemas %}
-    schema_{{ schema.name }},
+    schema_{{ schema.name }}(),
 {% endfor %}
 ))
