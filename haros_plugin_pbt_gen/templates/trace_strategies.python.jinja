@@ -68,7 +68,7 @@ trace.append(rec)
 #}
 {% macro _gen_spam_events(spam_strategies, schema, i) -%}
 # ---- spam events ----
-{% if len(spam_strategies) == 0 -%}
+{% if spam_strategies|length == 0 -%}
 # There are no spam events.
 {%- else -%}
 n = draw(strategies.integers(min_value=0, max_value={{ MAX_SPAM }}))
@@ -161,7 +161,7 @@ spam_{{ schema.name }}_{{ loop.index0 }}
 
 {% macro _unified_spam_strategies(schema) %}
   {% for segment in schema.segments %}
-    {% if len(segment.spam) > 0 %}
+    {% if segment.spam|length > 0 %}
 {# go for defaults first, then go for custom msgs #}
 {{ _spam_name(schema, loop.index0) }} = strategies.sampled_from((
       {% for msg_strategy in segment.spam.values() %}
