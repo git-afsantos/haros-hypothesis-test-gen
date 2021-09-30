@@ -1,9 +1,15 @@
 {# SPDX-License-Identifier: MIT #}
 {# Copyright © 2021 André Santos #}
 
-{##############################################################################
- # Test Case Macros
- ##############################################################################}
+{##############################################################################}
+{# Constants #}
+{##############################################################################}
+
+{% set MINI_RUN_EXAMPLES = 10 %}
+
+{##############################################################################}
+{# Test Case Macros #}
+{##############################################################################}
 
 {% macro _unittest_setup(publishers, subscribers) %}
 def setUp(self):
@@ -120,34 +126,30 @@ def _setup_sut(self):
 {% set n = schemas|length %}
 def _test_hypothesis_properties(self):
     if mode_random:
+        print("[Test Schemas]: Selecting schemas at random")
         self._test_random_schema()
     else:
 {% for schema in schemas %}
-        print("[Testing Schema {{ loop.index }}/{{ n }}]")
+        # print("[Schema {{ loop.index }}/{{ n }}]")
         self._test_schema_{{ schema.name }}()
 {% endfor %}
 
-@settings(
-    max_examples={{ settings['max_examples']|d(100, true) * n }},
-    deadline=None,
-    suppress_health_check=(
+COMMON_HYPOTHESIS_SETTINGS = {
+    'max_examples': {{ settings['max_examples']|d(100, true) }},
+    'deadline': None,
+    'suppress_health_check': (
         HealthCheck.filter_too_much,
         HealthCheck.too_slow,
-    )
-)
+    ),
+}
+
+@settings(**COMMON_HYPOTHESIS_SETTINGS)
 @given(trace=traces)
 def _test_random_schema(self, trace):
     self._run_example(trace)
 {% for schema in schemas %}
 
-@settings(
-    max_examples={{ settings['max_examples']|d(100, true) }},
-    deadline=None,
-    suppress_health_check=(
-        HealthCheck.filter_too_much,
-        HealthCheck.too_slow,
-    )
-)
+@settings(**COMMON_HYPOTHESIS_SETTINGS)
 @given(trace=schema_{{ schema.name }}())
 def _test_schema_{{ schema.name }}(self, trace):
     self._run_example(trace)
