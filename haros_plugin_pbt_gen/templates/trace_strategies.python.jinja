@@ -78,8 +78,8 @@ for msg, topic in spam:
     if timestamps[{{ i + 1 }}] < {{ MIN_TICK }}:
         timestamp = 0
     else:
-        timestamp = draw(strategies.sampled_from(0, {{ MIN_TICK }}, {# -#}
-            timestamps[{{ i + 1 }}]))
+        timestamp = draw(strategies.sampled_from((0, {{ MIN_TICK }}, {# -#}
+            timestamps[{{ i + 1 }}])))
     timestamps[{{ i + 1 }}] -= timestamp
     rec = MsgRecord(topic, timestamp, msg)
     trace.append(rec)
