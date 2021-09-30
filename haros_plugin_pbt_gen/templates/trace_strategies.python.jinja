@@ -73,10 +73,8 @@ trace.append(rec){# -#}
 {% if spam_strategies|length == 0 -%}
 # There are no spam events.{# -#}
 {%- else -%}
-n = draw(strategies.integers(min_value=0, max_value={{ MAX_SPAM }}))
-while n > 0:
-    strategy, topic = draw({{ _spam_name(schema, i) }})
-    msg = draw(strategy(trace=trace))
+spam = draw({{ _spam_name(schema, i) }}(trace))
+for msg, topic in spam:
     if timestamps[{{ i + 1 }}] < {{ MIN_TICK }}:
         timestamp = 0
     else:
@@ -85,7 +83,6 @@ while n > 0:
     timestamps[{{ i + 1 }}] -= timestamp
     rec = MsgRecord(topic, timestamp, msg)
     trace.append(rec)
-    n -= 1
 {%- endif %}{# -#}
 {%- endmacro %}
 
@@ -164,9 +161,24 @@ spam_{{ schema.name }}_{{ i }}
 
 {% macro _unified_spam_strategies(schema) %}
   {% for segment in schema.segments %}
-    {% if segment.spam|length > 0 %}
+    {% set n = segment.spam|length %}
+    {% if n == 1 %}
+@strategies.composite
+def {{ _spam_name(schema, loop.index0) }}(draw, trace):
+    return draw(strategies.lists(strategies.tuples(
+      {% for msg_strategy in segment.spam.values() %}
+        {% if not msg_strategy.is_default %}
+        {{ msg_strategy.name }}(trace=trace),
+        {% else %}
+        {{ msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) }}(),
+        {% endif %}
+        strategies.just('{{ msg_strategy.topic }}')
+      {% endfor %}
+    ), min_size=0, max_size={{ MAX_SPAM }}))
+
+    {% elif n > 1 %}
 {# go for custom first, then go for default msgs #}
-{{ _spam_name(schema, loop.index0) }} = strategies.sampled_from((
+{{ _spam_name(schema, loop.index0) }}_elems = strategies.sampled_from((
       {% for msg_strategy in segment.spam.values() %}
         {% if not msg_strategy.is_default %}
     ({{ msg_strategy.name }}, '{{ msg_strategy.topic }}'),
@@ -179,6 +191,16 @@ spam_{{ schema.name }}_{{ i }}
         {% endif %}
       {% endfor %}
 ))
+
+@strategies.composite
+def {{ _spam_name(schema, loop.index0) }}(draw, trace):
+    spam = draw(strategies.lists({# -#}
+        {{ _spam_name(schema, loop.index0) }}_elems, {# -#}
+        min_size=0, max_size={{ MAX_SPAM }}))
+    for i in range(len(spam)):
+        msg_strat, topic = spam[i]
+        spam[i] = (draw(msg_strat(trace=trace)), topic)
+    return spam
 
     {% endif %}
   {% endfor %}
