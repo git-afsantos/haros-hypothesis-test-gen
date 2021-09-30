@@ -346,7 +346,7 @@ class TestSchemaBuilder(object):
             raise ValueError('interval lower_bound: ' + str(lower_bound))
         if not (upper_bound > lower_bound and upper_bound <= INF):
             raise ValueError('interval upper bound: ' + str(upper_bound))
-        ts = int(lower_bound)
+        ts = int(lower_bound * 1000)
         tf = INT_INF if upper_bound == INF else int(upper_bound * 1000)
         self.segments.append(TraceSegmentBuilder(ts=ts, tf=tf))
 
