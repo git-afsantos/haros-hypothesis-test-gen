@@ -6,6 +6,7 @@
 
 {% set TIME_INF = 1000 %}
 {% set MAX_SPAM = 3 %}
+{% set MIN_TICK = 10 %} {# ms #}
 
 {% macro _ordinal(n) -%}
   {% if n == 11 or n == 12 or n == 13 -%}
@@ -76,11 +77,11 @@ n = draw(strategies.integers(min_value=0, max_value={{ MAX_SPAM }}))
 while n > 0:
     strategy, topic = draw({{ _spam_name(schema, i) }})
     msg = draw(strategy(trace=trace))
-    if timestamps[{{ i + 1 }}] == 0:
+    if timestamps[{{ i + 1 }}] < {{ MIN_TICK }}:
         timestamp = 0
     else:
-        timestamp = draw(strategies.integers(min_value=0,
-            max_value=timestamps[{{ i + 1 }}]))
+        timestamp = draw(strategies.sampled_from(0, {{ MIN_TICK }}, {# -#}
+            timestamps[{{ i + 1 }}]))
     timestamps[{{ i + 1 }}] -= timestamp
     rec = MsgRecord(topic, timestamp, msg)
     trace.append(rec)
@@ -164,17 +165,17 @@ spam_{{ schema.name }}_{{ i }}
 {% macro _unified_spam_strategies(schema) %}
   {% for segment in schema.segments %}
     {% if segment.spam|length > 0 %}
-{# go for defaults first, then go for custom msgs #}
+{# go for custom first, then go for default msgs #}
 {{ _spam_name(schema, loop.index0) }} = strategies.sampled_from((
+      {% for msg_strategy in segment.spam.values() %}
+        {% if not msg_strategy.is_default %}
+    ({{ msg_strategy.name }}, '{{ msg_strategy.topic }}'),
+        {% endif %}
+      {% endfor %}
       {% for msg_strategy in segment.spam.values() %}
         {% if msg_strategy.is_default %}
     ({{ msgs.strategy_name(msg_strategy.pkg, msg_strategy.msg) }}, {# -#}
       '{{ msg_strategy.topic }}'),
-        {% endif %}
-      {% endfor %}
-      {% for msg_strategy in segment.spam.values() %}
-        {% if not msg_strategy.is_default %}
-    ({{ msg_strategy.name }}, '{{ msg_strategy.topic }}'),
         {% endif %}
       {% endfor %}
 ))
