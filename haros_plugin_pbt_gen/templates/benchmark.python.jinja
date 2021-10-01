@@ -1,0 +1,95 @@
+{# SPDX-License-Identifier: MIT #}
+{# Copyright © 2021 André Santos #}
+
+{##############################################################################}
+{# RENDERED CODE #}
+{##############################################################################}
+
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# SPDX-License-Identifier: MIT
+# Copyright © 2021 André Santos
+
+###############################################################################
+# Imports
+###############################################################################
+
+from __future__ import print_function, unicode_literals
+import io
+import os
+from subprocess import check_output, STDOUT
+import sys
+
+
+###############################################################################
+# Test Execution
+###############################################################################
+
+def _run_test(filepath):
+    cmd = ["python", filepath, "json", "csv"]
+    try:
+        output = check_output(cmd, stderr=STDOUT)
+    except Exception as e:
+        print("ERROR:", e)
+    assert filepath.endswith(".py")
+    filepath = filepath[:-3] + ".csv"
+    with io.open(filepath, "r", encoding="utf-8") as f:
+        data = f.readlines()[1]
+    return data
+
+
+###############################################################################
+# Output
+###############################################################################
+
+def _output_results(results):
+    columns = ",".join((
+        "Number of examples",
+        "Number of failures",
+        "Examples to failure",
+        "Invalid examples",
+        "Shrink attempts",
+        "Time per example (s)",
+        "Trace duration (s)",
+        "Setup/Teardown time (s)",
+        "Input trace size (messages)",
+        "Excess Messages",
+    ))
+    with io.open("benchmark.csv", "w", encoding="utf-8") as f:
+        f.write(columns + "\n")
+        f.write("\n".join(results))
+        f.write("\n")
+
+
+###############################################################################
+# Entry Point
+###############################################################################
+
+def main():
+    print("PBT TEST BENCHMARK")
+    results = []
+    this_dir = os.path.dirname(os.path.realpath(__file__))
+    this_file = os.path.basename(__file__)
+    for root, directories, filenames in os.walk(this_dir):
+        for filename in filenames:
+            if filename.endswith(".py"):
+                if filename == this_file:
+                    continue
+                filepath = os.path.join(root, filename)
+                print("Running Test #{}".format(len(results) + 1))
+                print("  >>", filepath)
+                stats = _run_test(filepath)
+                print("Done.")
+                results.append(stats)
+    print("Writing final results in CSV file...")
+    try:
+        _output_results(results)
+    except Exception as e:
+        print("ERROR:", e)
+        return 1
+    print("Done.")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
