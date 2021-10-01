@@ -373,11 +373,11 @@ class TestTracer(unittest.TestCase):
                     if self.first_fail is None:
                         self.first_fail = self.n_examples
                     print("[Example #{}]: FAIL".format(self.n_examples))
+                if self.witness is not None:
+                    self._report_witness(trace.schema)
             else:
                 self.n_failed_assumptions += 1
                 print("[Example #{}]: INVALID".format(self.n_examples))
-            if self.witness is not None:
-                self._report_witness(trace.schema)
             self._teardown_sut()
 
 {{ _eval_trace(axioms)|indent(width=4, first=true) }}
