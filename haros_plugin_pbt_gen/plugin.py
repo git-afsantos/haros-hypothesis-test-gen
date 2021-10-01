@@ -580,20 +580,19 @@ class StrategyManager(object):
                     self.open_topics[topic] = (info[0], phi)
 
     def _default_msg_for_type(self, default_strategies, ros_type):
-        if ros_type not in default_strategies:
-            stack = [ros_type]
-            while stack:
-                type_token = stack.pop()
-                if type_token.is_primitive or type_token.is_header:
-                    continue
-                if type_token.is_time or type_token.is_duration:
-                    continue
-                if type_token.type_name in self.default_strategies:
-                    continue
-                if type_token.is_array:
-                    stack.append(type_token.type_token)
-                else:
-                    assert type_token.is_message
-                    self.pkg_imports.add(type_token.package)
-                    default_strategies.add(type_token)
-                    stack.extend(type_token.fields.values())
+        stack = [ros_type]
+        while stack:
+            type_token = stack.pop()
+            if type_token.is_primitive or type_token.is_header:
+                continue
+            if type_token.is_time or type_token.is_duration:
+                continue
+            if type_token in default_strategies:
+                continue
+            if type_token.is_array:
+                stack.append(type_token.type_token)
+            else:
+                assert type_token.is_message
+                self.pkg_imports.add(type_token.package)
+                default_strategies.add(type_token)
+                stack.extend(type_token.fields.values())
