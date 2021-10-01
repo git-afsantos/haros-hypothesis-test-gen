@@ -38,13 +38,29 @@ def setUp(self):
     self.n_examples = 0
     self.n_failed_assumptions = 0
     self.first_fail = None
-    self.counterexample_size = -1
+    self.n_shrinks = 0
+    self.counterexample_size = None
     self.n_fail = 0
-    self.times = []
+    self.total_time = 0.0
+    self.avg_time_example = 0.0
+    self.avg_time_trace = 0.0
+    self.avg_time_setup = 0.0
+    self.json_stats = {
+        "num_examples": None,
+        "num_failures": None,
+        "first_failure": None,
+        "num_invalid": None,
+        "num_shrinks": None,
+        "avg_time_example": None,
+        "avg_time_trace": None,
+        "avg_time_setup": None,
+        "size_counterexample": None,
+    }
 {% endmacro %}
 
 {% macro _setup_test(main_monitor, monitors, axioms) %}
 def _setup_test(self):
+    self.trace_start_time = 0
     self.launch_time = 0
     self.deadline = 0
     self.monitors = []
@@ -229,6 +245,9 @@ class EarlySuccess(Exception):
 class TestTracer(unittest.TestCase):
     NODES = {{ nodes }}
 
+    output_json = False
+    output_csv = False
+
 {{ _unittest_setup(publishers, subscribers)|indent(width=4, first=true) }}
 
     def tearDown(self):
@@ -250,22 +269,38 @@ class TestTracer(unittest.TestCase):
             self.n_examples = 0
             self.n_fail = 0
             self.n_failed_assumptions = 0
+            self.n_shrinks = 0
             self._test_hypothesis_properties()
         finally:
-            if self.times:
-                s = sum(self.times)
-                avg = s / len(self.times)
-                print("Avg. test time:", avg)
-                print("Total time:", s)
+            if self.first_fail is not None:
+                self.n_shrinks = self.n_examples - self.first_fail
+            self.json_stats = {
+                "num_examples": self.n_examples,
+                "num_failures": self.n_fail,
+                "first_failure": self.first_fail,
+                "num_invalid": self.n_failed_assumptions,
+                "num_shrinks": self.n_shrinks,
+                "avg_time_example": self.avg_time_example,
+                "avg_time_trace": self.avg_time_trace,
+                "avg_time_setup": self.avg_time_setup,
+                "size_counterexample": self.counterexample_size,
+            }
+            if self.n_examples > 0:
+                print("Avg. test time:", self.avg_time_example)
+                print("Total time:", self.total_time)
             print("Number of examples: {} ({} failures)".format(
                 self.n_examples, self.n_fail))
             print("Number of failed assumptions: {}".format(
                 self.n_failed_assumptions))
             if self.first_fail is not None:
                 print("First failure at example #{} ({} shrink attempts)".format(
-                    self.first_fail, (self.n_examples - self.first_fail)))
+                    self.first_fail, self.n_shrinks))
                 print("Counterexample trace size: {} messages".format(
                     self.counterexample_size))
+            if self.output_json:
+                self._write_json_output()
+            if self.output_csv:
+                self._write_csv_output()
 
 {{ _test_hypothesis(settings, schemas)|indent(width=4, first=true) }}
 
@@ -284,7 +319,8 @@ class TestTracer(unittest.TestCase):
         if rospy.is_shutdown():
             return
         try:
-            time_prev = get_time()
+            self.trace_start_time = get_time()
+            time_prev = self.trace_start_time
             self._update(time_now=time_prev)
             self.trace_start_time = time_prev
             mon = self.main_monitor
@@ -319,8 +355,19 @@ class TestTracer(unittest.TestCase):
             passed = True
             print("[Example #{}]: OK".format(self.n_examples))
         finally:
-            self.times.append(get_time() - self.launch_time)
+            time_now = get_time()
+            t_test = time_now - self.launch_time
+            t_trace = time_now - self.trace_start_time
+            t_setup = t_test - t_trace
+            n = float(self.n_examples)
+            self.total_time += t_test
+            self.avg_time_setup = self.avg_time_setup * (n-1)/n + (t_setup / n)
             if self.assumptions_ok:
+                n = float(self.n_examples - self.n_failed_assumptions)
+                self.avg_time_example = self.avg_time_example * (n-1) / n
+                self.avg_time_example += t_test / n
+                self.avg_time_trace = self.avg_time_trace * (n-1) / n
+                self.avg_time_trace += t_trace / n
                 if not passed:
                     self.n_fail += 1
                     if self.first_fail is None:
@@ -527,3 +574,45 @@ class TestTracer(unittest.TestCase):
                 note("(same as above)")
             prev = record
         note("### END COUNTEREXAMPLE ###")
+
+    def _write_json_output(self):
+        filename = os.path.splitext(os.path.basename(__file__))[0] + '.json'
+        try:
+            with io.open(filename, "w", encoding="utf-8") as f:
+                f.write(json.dumps(self.json_stats))
+        except:
+            pass
+
+    def _write_csv_output(self):
+        columns = (
+            "Number of examples",
+            "Number of failures",
+            "Examples to failure",
+            "Invalid examples",
+            "Shrink attempts",
+            "Time per example (s)",
+            "Trace duration (s)",
+            "Setup/Teardown time (s)",
+            "Input trace size (messages)",
+            "Excess Messages",
+        )
+        data = (
+            str(self.n_examples),
+            str(self.n_fail),
+            str(self.first_fail or ''),
+            str(self.n_failed_assumptions),
+            str(self.n_shrinks),
+            str(self.avg_time_example),
+            str(self.avg_time_trace),
+            str(self.avg_time_setup),
+            str(self.counterexample_size),
+            "?",
+        )
+        filename = os.path.splitext(os.path.basename(__file__))[0] + '.csv'
+        columns = ",".join(columns)
+        data = ",".join(data)
+        try:
+            with io.open(filename, "w", encoding="utf-8") as f:
+                f.write(columns + "\n" + data + "\n")
+        except:
+            pass

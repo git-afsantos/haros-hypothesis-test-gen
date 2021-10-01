@@ -19,6 +19,8 @@ from __future__ import print_function, unicode_literals
 from builtins import object, range, str
 from collections import deque, namedtuple
 from functools import partial
+import io
+import json
 from math import pi as PI
 from math import e as E
 from math import (
@@ -313,9 +315,15 @@ mode_random = False
 def main(args):
     # {{ property_text }}
     rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
-    if args and args[0] == 'random':
-        global mode_random
-        mode_random = True
+    if args:
+        if args[0] == 'random':
+            global mode_random
+            mode_random = True
+        for arg in args:
+            if arg == 'json':
+                TestTracer.output_json = True
+            elif arg == 'csv':
+                TestTracer.output_csv = True
     unittest.main(module=__name__, argv=[__name__], exit=False)
     sys.stdout.flush()
 
