@@ -70,6 +70,25 @@ def configuration_analysis(iface, config):
     except SpecError as e:
         iface.log_error(e.message)
 
+def post_analysis(iface):
+    jinja_env = Environment(
+        loader=PackageLoader(KEY, "templates"),
+        line_statement_prefix=None,
+        line_comment_prefix=None,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        autoescape=False
+    )
+    template = jinja_env.get_template("benchmark.python.jinja")
+    python = template.render()
+    filename = "benchmark.py"
+    with io.open(filename, "w", encoding="utf-8") as f:
+        f.write(python.lstrip())
+    mode = os.stat(filename).st_mode
+    mode |= (mode & 0o444) >> 2
+    os.chmod(filename, mode)
+    iface.export_file(filename)
+
 
 def _validate_settings(iface, settings):
     msg = "invalid setting for '{}': {}; expected one of {}; assuming {}"
@@ -180,8 +199,6 @@ class TestGenerator(object):
             msg = msg.format(self.config.name)
             self.iface.log_warning(msg)
             # TODO generate "empty" monitor, all others become secondary
-        else:
-            self._write_benchmark_file()
 
     def _filter_properties(self):
         properties = []
@@ -409,18 +426,6 @@ class TestGenerator(object):
         else:
             python = self._render_template(
                 "test_script.python.jinja", data, strip=False)
-        with io.open(filename, "w", encoding="utf-8") as f:
-            f.write(python.lstrip())
-        mode = os.stat(filename).st_mode
-        mode |= (mode & 0o444) >> 2
-        os.chmod(filename, mode)
-        self.iface.export_file(filename)
-
-    def _write_benchmark_file(self):
-        data = {"test_files": self.test_files}
-        python = self._render_template("benchmark.python.jinja",
-            data, strip=False)
-        filename = "benchmark.py"
         with io.open(filename, "w", encoding="utf-8") as f:
             f.write(python.lstrip())
         mode = os.stat(filename).st_mode
