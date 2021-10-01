@@ -33,7 +33,7 @@ def _run_test(filepath):
     except Exception as e:
         print("ERROR:", e)
     assert filepath.endswith(".py")
-    filepath = filepath[:-3] + ".csv"
+    filepath = os.path.basename(filepath)[:-3] + ".csv"
     with io.open(filepath, "r", encoding="utf-8") as f:
         data = f.readlines()[1]
     return data
