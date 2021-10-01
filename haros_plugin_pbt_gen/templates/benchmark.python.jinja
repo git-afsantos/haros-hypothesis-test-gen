@@ -35,7 +35,7 @@ def _run_test(filepath):
     assert filepath.endswith(".py")
     filepath = os.path.basename(filepath)[:-3] + ".csv"
     with io.open(filepath, "r", encoding="utf-8") as f:
-        data = f.readlines()[1]
+        data = f.readlines()[1].rstrip()
     return data
 
 
