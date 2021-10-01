@@ -549,7 +549,7 @@ class StrategyManager(object):
                 for strategy in iterchain(seg.published, seg.spam.values()):
                     if strategy.is_default:
                         ros_type, x = self.open_topics[strategy.topic]
-                        default_strategies.add(ros_type)
+                        self._default_msg_for_type(default_strategies, ros_type)
                     else:
                         custom_msg_strategies.append(strategy)
                     if strategy.alias is not None:
@@ -578,3 +578,22 @@ class StrategyManager(object):
                 if info is not None:
                     phi = info[1].join(event.predicate.negate())
                     self.open_topics[topic] = (info[0], phi)
+
+    def _default_msg_for_type(self, default_strategies, ros_type):
+        if ros_type not in default_strategies:
+            stack = [ros_type]
+            while stack:
+                type_token = stack.pop()
+                if type_token.is_primitive or type_token.is_header:
+                    continue
+                if type_token.is_time or type_token.is_duration:
+                    continue
+                if type_token.type_name in self.default_strategies:
+                    continue
+                if type_token.is_array:
+                    stack.append(type_token.type_token)
+                else:
+                    assert type_token.is_message
+                    self.pkg_imports.add(type_token.package)
+                    default_strategies.add(type_token)
+                    stack.extend(type_token.fields.values())
