@@ -130,6 +130,16 @@ def _validate_settings(iface, settings):
         iface.log_warning(msg.format(key, val, exp, default))
         settings[key] = default
 
+    key = "schemas"
+    val = settings.get(key)
+    exp = dict
+    default = {}
+    if val is None:
+        settings[key] = default
+    elif not isinstance(val, dict):
+        iface.log_warning(msg.format(key, val, exp, default))
+        settings[key] = default
+
 
 ################################################################################
 # Data Structures
@@ -315,8 +325,9 @@ class TestGenerator(object):
         tests = []
         for i in range(len(monitors)):
             p = monitors[i].hpl_property
+            pschema = self._get_user_schema_for_property(p)
             try:
-                strategies = self.strategies.build_strategies(p)
+                strategies = self.strategies.build_strategies(p, schema=pschema)
                 data = {
                     "type_tokens": strategies['default_strategies'],
                     "random_headers": self.settings.get("random_headers", True),
@@ -509,6 +520,15 @@ class TestGenerator(object):
             axioms.append(p)
         return axioms
 
+    def _get_user_schema_for_property(self, p):
+        user_schemas = self.settings["schemas"]
+        pid = p.uid
+        pschema = None
+        if pid is not None:
+            pschema = user_schemas.get(pid)
+            # FIXME: parse schema
+        return pschema
+
 
 ################################################################################
 # Strategy Building
@@ -531,7 +551,7 @@ class StrategyManager(object):
         self._mapping_hpl_axioms(data_axioms)
         self.deadline = deadline
 
-    def build_strategies(self, prop):
+    def build_strategies(self, prop, schema=None):
         alias_types = {}
         for high_level_event in prop.events():
             for event in high_level_event.simple_events():
