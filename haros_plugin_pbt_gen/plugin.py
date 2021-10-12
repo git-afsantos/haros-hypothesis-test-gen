@@ -13,7 +13,7 @@ import io
 from itertools import chain as iterchain
 import os
 
-from hpl.ast import HplVacuousTruth
+from hpl.ast import HplAstObject, HplVacuousTruth
 from hplrv.rendering import TemplateRenderer
 from rostypes.loader import get_type
 from jinja2 import Environment, PackageLoader
@@ -57,7 +57,7 @@ def configuration_analysis(iface, config):
         config_num += 1
         gen = TestGenerator(iface, config, settings)
         gen.make_tests(config_num)
-        if settings["run_tests"]:
+        if gen.num_tests > 0 and settings["run_tests"]:
             iface.log_debug("settings:run_tests is set to True")
             runner = TestRunner(iface, config)
             runner.start_roscore()
@@ -184,6 +184,10 @@ class TestGenerator(object):
         self.node_names = list(n.rosname.full for n in config.nodes.enabled)
         self.test_files = []
 
+    @property
+    def num_tests(self):
+        return len(self.test_files)
+
     def make_tests(self, config_num):
         self.test_files = []
         hpl_properties = self._filter_properties()
@@ -203,6 +207,10 @@ class TestGenerator(object):
     def _filter_properties(self):
         properties = []
         for p in self.config.hpl_properties:
+            if not isinstance(p, HplAstObject):
+                self.iface.log_warning(
+                    "Skipping unparsed property:\n{}".format(p))
+                continue
             if not p.is_fully_typed():
                 self.iface.log_warning(
                     "Skipping untyped property:\n{}".format(p))
