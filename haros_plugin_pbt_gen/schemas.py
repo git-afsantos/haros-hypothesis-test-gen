@@ -17,6 +17,7 @@ from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
     ContradictionError
 )
+import .schema_parser
 from .selectors import Selector
 from .util import StrategyError, convert_to_old_format
 
@@ -59,6 +60,13 @@ MsgStrategy = namedtuple('MsgStrategy', (
     'alias',        # string
 ))
 
+
+################################################################################
+# Schema Parser Entry Point
+################################################################################
+
+def schema_from_text(text):
+    data = schema_parser.parse(text)
 
 ################################################################################
 # High-level Schema Builders
