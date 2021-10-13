@@ -34,7 +34,7 @@ forbid_statement: "forbid" event
 
 event: ros_name predicate?
 
-timestamp: "+" INT [".." INT] ":"
+timestamp: "+" INT ".." [INT] ":"
 ''' + PREDICATE_GRAMMAR
 
 
