@@ -17,7 +17,7 @@ from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
     ContradictionError
 )
-import .schema_parser
+from . import schema_parser
 from .selectors import Selector
 from .util import StrategyError, convert_to_old_format
 
