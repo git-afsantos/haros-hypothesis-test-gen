@@ -88,4 +88,4 @@ def parse(text, debug=False):
     try:
         return lark.parse(text)
     except (UnexpectedToken, UnexpectedCharacters, SyntaxError) as e:
-            raise SchemaParseError(str(e))
+        raise SchemaParseError(str(e))
