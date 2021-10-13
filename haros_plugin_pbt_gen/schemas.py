@@ -419,8 +419,12 @@ class TestSchemaBuilder(object):
         return other
 
     def __str__(self):
-        return '#{}\n{}'.format(self.name,
-            '\n'.join(str(s) for s in self.segments))
+        segments = []
+        if len(self.segments) > 0:
+            segmentsa.append(self.segments[0].lean_str())
+        for s in self.segments[1:]:
+            segments.append(str(s))
+        return '#{}\n{}'.format(self.name, '\n'.join(s for s in segments))
 
 
 class TraceSegmentBuilder(object):
@@ -519,8 +523,18 @@ class TraceSegmentBuilder(object):
         other.forbid_events = list(self.forbid_events)
         return other
 
+    def lean_str(self):
+        if self.lower_bound != 0:
+            return str(self)
+        if self.is_bounded:
+            return str(self)
+        if len(self.publish_events) > 0:
+            return str(self)
+        return '\n  '.join('forbid {} {{ {} }}'.format(e.topic, e.predicate)
+                           for e in self.forbid_events)
+
     def __str__(self):
-        if self.upper_bound < 0:
+        if not self.is_bounded:
             time = '+{}..:'.format(self.lower_bound)
         else:
             time = '+{}..{}:'.format(self.lower_bound, self.upper_bound)
