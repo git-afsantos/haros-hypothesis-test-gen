@@ -534,7 +534,7 @@ class TestGenerator(object):
                 self.iface.log_debug("schema: " + pschema)
         if isinstance(pschemas, basestring):
             pschemas = [pschemas]
-        return pschema
+        return pschemas
 
 
 ################################################################################
