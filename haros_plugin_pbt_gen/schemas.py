@@ -556,9 +556,9 @@ class TraceSegmentBuilder(object):
             time = '+{}..:'.format(self.lower_bound)
         else:
             time = '+{}..{}:'.format(self.lower_bound, self.upper_bound)
-        ps = ''.join('\n  publish {} {{ {} }}'.format(e.topic, e.predicate)
+        ps = ''.join('\n  publish {} {}'.format(e.topic, e.predicate)
                      for e in self.publish_events)
-        fs = ''.join('\n  forbid {} {{ {} }}'.format(e.topic, e.predicate)
+        fs = ''.join('\n  forbid {} {}'.format(e.topic, e.predicate)
                      for e in self.forbid_events)
         return '{}{}{}'.format(time, ps, fs)
 
