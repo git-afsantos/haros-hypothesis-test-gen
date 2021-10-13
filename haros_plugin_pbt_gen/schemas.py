@@ -439,7 +439,7 @@ class TestSchemaBuilder(object):
     def __str__(self):
         segments = []
         if len(self.segments) > 0:
-            segmentsa.append(self.segments[0].lean_str())
+            segments.append(self.segments[0].lean_str())
         for s in self.segments[1:]:
             segments.append(str(s))
         return '#{}\n{}'.format(self.name, '\n'.join(s for s in segments))
