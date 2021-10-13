@@ -572,6 +572,9 @@ class StrategyManager(object):
             builders = schemas_for_property(prop, unroll=0)
         else:
             builders = [schema_from_text(schema) for schema in schemas]
+            # renaming
+            for i in range(len(builders)):
+                builders[i].name = 'user_schema' + str(i)
         # all_topics: {topic: (ros_type, assumption predicate)}
         # inf: int >= 0 (value to replace infinity with)
         #      int < 0 (treat infinity as unbounded/max. int)
