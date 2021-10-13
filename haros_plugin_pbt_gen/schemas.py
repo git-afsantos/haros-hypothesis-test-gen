@@ -66,7 +66,25 @@ MsgStrategy = namedtuple('MsgStrategy', (
 ################################################################################
 
 def schema_from_text(text):
-    data = schema_parser.parse(text)
+    statements = schema_parser.parse(text)
+    builder = TestSchemaBuilder()
+    for stmt in statements:
+        if stmt[0] == 'publish':
+            lower_bound, upper_bound = stmt[1]
+            lower_bound /= 1000.0
+            if upper_bound is None:
+                upper_bound = INF
+            else:
+                upper_bound /= 1000.0
+            builder.new_timestamp(lower_bound, upper_bound)
+            ros_name, phi = stmt[2]
+            builder.publish(ros_name, phi)
+        elif stmt[0] == 'forbid':
+            ros_name, phi = stmt[1]
+            builder.forbid(ros_name, phi)
+        else:
+            assert False, 'schema statement: {}'.format(stmt[0])
+    return builder
 
 ################################################################################
 # High-level Schema Builders
@@ -526,7 +544,7 @@ class TraceSegmentBuilder(object):
     def lean_str(self):
         if self.lower_bound != 0:
             return str(self)
-        if self.is_bounded:
+        if not self.is_single_instant:
             return str(self)
         if len(self.publish_events) > 0:
             return str(self)

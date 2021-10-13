@@ -48,6 +48,7 @@ setup(
         "hpl-specs",
         "hpl-rv-gen>=0.2.0,<1.0.0",
         "rospy",
+        "lark-parser<1.0.0",
     ],
     zip_safe = False
 )

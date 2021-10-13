@@ -23,7 +23,7 @@ from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
     ContradictionError
 )
-from .schemas import schemas_for_property
+from .schemas import schema_from_text, schemas_for_property
 from .selectors import Selector
 from .util import StrategyError, convert_to_old_format
 from .test_runner import TestRunner
@@ -561,7 +561,10 @@ class StrategyManager(object):
                         alias_types[event.alias] = ros_type
                     except KeyError:
                         pass # not open subscribed topic
-        builders = schemas_for_property(prop, unroll=1)
+        if schema is None:
+            builders = schemas_for_property(prop, unroll=0)
+        else:
+            builders = [schema_from_text(schema)]
         # all_topics: {topic: (ros_type, assumption predicate)}
         # inf: int >= 0 (value to replace infinity with)
         #      int < 0 (treat infinity as unbounded/max. int)
