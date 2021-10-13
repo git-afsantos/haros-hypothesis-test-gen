@@ -548,7 +548,7 @@ class TraceSegmentBuilder(object):
             return str(self)
         if len(self.publish_events) > 0:
             return str(self)
-        return '\n  '.join('forbid {} {{ {} }}'.format(e.topic, e.predicate)
+        return '\n  '.join('forbid {} {}'.format(e.topic, e.predicate)
                            for e in self.forbid_events)
 
     def __str__(self):
