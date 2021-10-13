@@ -12,6 +12,7 @@ from collections import namedtuple
 import io
 from itertools import chain as iterchain
 import os
+from past.builtins import basestring
 
 from hpl.ast import HplAstObject, HplVacuousTruth
 from hplrv.rendering import TemplateRenderer
@@ -325,9 +326,9 @@ class TestGenerator(object):
         tests = []
         for i in range(len(monitors)):
             p = monitors[i].hpl_property
-            pschema = self._get_user_schema_for_property(p)
+            pschemas = self._get_user_schemas_for_property(p)
             try:
-                strategies = self.strategies.build_strategies(p, schema=pschema)
+                strategies = self.strategies.build_strategies(p, schemas=pschemas)
                 data = {
                     "type_tokens": strategies['default_strategies'],
                     "random_headers": self.settings.get("random_headers", True),
@@ -520,16 +521,19 @@ class TestGenerator(object):
             axioms.append(p)
         return axioms
 
-    def _get_user_schema_for_property(self, p):
+    def _get_user_schemas_for_property(self, p):
         user_schemas = self.settings["schemas"]
         pid = p.uid
-        pschema = None
+        pschemas = None
         if pid is not None:
-            pschema = user_schemas.get(pid)
-        if pschema is not None:
-            self.iface.log_debug("Generate tests for user-provided schema.")
+            pschemas = user_schemas.get(pid)
+        if pschemas is not None:
+            self.iface.log_debug("Generate tests for user-provided schemas.")
             self.iface.log_debug("property: " + str(p))
-            self.iface.log_debug("schema: " + pschema)
+            for pschema in pschemas:
+                self.iface.log_debug("schema: " + pschema)
+        if isinstance(pschemas, basestring):
+            pschemas = [pschemas]
         return pschema
 
 
@@ -554,7 +558,7 @@ class StrategyManager(object):
         self._mapping_hpl_axioms(data_axioms)
         self.deadline = deadline
 
-    def build_strategies(self, prop, schema=None):
+    def build_strategies(self, prop, schemas=None):
         alias_types = {}
         for high_level_event in prop.events():
             for event in high_level_event.simple_events():
@@ -564,10 +568,10 @@ class StrategyManager(object):
                         alias_types[event.alias] = ros_type
                     except KeyError:
                         pass # not open subscribed topic
-        if schema is None:
+        if not schemas:
             builders = schemas_for_property(prop, unroll=0)
         else:
-            builders = [schema_from_text(schema)]
+            builders = [schema_from_text(schema) for schema in schemas]
         # all_topics: {topic: (ros_type, assumption predicate)}
         # inf: int >= 0 (value to replace infinity with)
         #      int < 0 (treat infinity as unbounded/max. int)
