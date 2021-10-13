@@ -42,6 +42,7 @@ setup(
     #entry_points = {"console_scripts": ["haros = haros.haros:main"]},
     package_data = {"haros_plugin_pbt_gen": extra_files},
     install_requires = [
+        "future",
         "Jinja2>=2.10.0",
         "hypothesis>=4.0.0,<5.0.0",
         "ros-type-tokens",
