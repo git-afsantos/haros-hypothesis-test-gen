@@ -526,7 +526,10 @@ class TestGenerator(object):
         pschema = None
         if pid is not None:
             pschema = user_schemas.get(pid)
-            # FIXME: parse schema
+        if pschema is not None:
+            self.iface.log_debug("Generate tests for user-provided schema.")
+            self.iface.log_debug("property: " + str(p))
+            self.iface.log_debug("schema: " + pschema)
         return pschema
 
 
