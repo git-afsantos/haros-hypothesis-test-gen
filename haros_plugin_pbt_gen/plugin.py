@@ -24,7 +24,9 @@ from .data import (
     MessageStrategyGenerator, CyclicDependencyError, InvalidFieldOperatorError,
     ContradictionError
 )
-from .schemas import schema_from_text, schemas_for_property
+from .schemas import (
+    refine_schemas_with_time_axioms, schema_from_text, schemas_for_property
+)
 from .selectors import Selector
 from .util import StrategyError, convert_to_old_format
 from .test_runner import TestRunner
@@ -542,7 +544,7 @@ class TestGenerator(object):
 ################################################################################
 
 class StrategyManager(object):
-    __slots__ = ('open_topics', 'pkg_imports', 'deadline')
+    __slots__ = ('open_topics', 'pkg_imports', 'deadline', 'time_axioms')
 
     def __init__(self, topics, assumptions, data_axioms, time_axioms, deadline=10.0):
         # topics: topic -> ROS type token
@@ -557,6 +559,7 @@ class StrategyManager(object):
         self._mapping_hpl_assumptions(assumptions)
         self._mapping_hpl_axioms(data_axioms)
         self.deadline = deadline
+        self.time_axioms = time_axioms
 
     def build_strategies(self, prop, schemas=None):
         alias_types = {}
@@ -575,6 +578,7 @@ class StrategyManager(object):
             # renaming
             for i in range(len(builders)):
                 builders[i].name = 'user_schema' + str(i)
+        builders = refine_schemas_with_time_axioms(builders, self.time_axioms)
         # all_topics: {topic: (ros_type, assumption predicate)}
         # inf: int >= 0 (value to replace infinity with)
         #      int < 0 (treat infinity as unbounded/max. int)

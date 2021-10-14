@@ -62,6 +62,17 @@ MsgStrategy = namedtuple('MsgStrategy', (
 
 
 ################################################################################
+# Schema Refinement
+################################################################################
+
+def refine_schemas_with_time_axioms(builders, time_axioms):
+    new_builders = []
+    for builder in builders:
+        new_builders.append(builder)
+    return new_builders
+
+
+################################################################################
 # Schema Parser Entry Point
 ################################################################################
 
