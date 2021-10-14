@@ -68,8 +68,129 @@ MsgStrategy = namedtuple('MsgStrategy', (
 def refine_schemas_with_time_axioms(builders, time_axioms):
     new_builders = []
     for builder in builders:
-        new_builders.append(builder)
+        refined = [builder]
+        for axiom in time_axioms:
+            _refine_with_time_axiom(refined, axiom)
+        new_builders.extend(refined)
     return new_builders
+
+def _refine_with_time_axiom(builders, axiom):
+    try:
+        if axiom.pattern.is_prevention:
+            _sr_forbids(builders, axiom)
+        else:
+            pass # NYI
+    except ContradictionError:
+        raise StrategyError.unsat_axiom(axiom)
+
+def _sr_forbids(builders, axiom):
+    assert axiom.pattern.is_prevention
+    a = axiom.pattern.trigger
+    b = axiom.pattern.behaviour
+    t = axiom.max_time
+    assert a.is_simple_event
+    assert b.is_simple_event
+    if not a.predicate.is_vacuous:
+        return # NYI
+    if not a.predicate.is_true:
+        return # nothing to do
+    if b.predicate.is_vacuous and not b.predicate.is_true:
+        return # nothing to do
+    if a.topic == b.topic:
+        _sr_forbids_eq_topic(builders, a, b, t)
+    else:
+        pass # NYI
+
+def _sr_forbids_eq_topic(builders, a, b, t):
+    assert a.topic == b.topic
+    assert a.predicate.is_vacuous and a.predicate.is_true
+    if t == INF:
+        _sr_forbids_eq_topic_forever(builders, a, b)
+    else:
+        _sr_forbids_eq_topic_interval(builders, a, b, t)
+
+def _sr_forbids_eq_topic_forever(builders, a, b):
+    assert a.topic == b.topic
+    assert a.predicate.is_vacuous and a.predicate.is_true
+    assert not b.predicate.is_vacuous or b.predicate.is_true
+    if b.predicate.is_vacuous and b.predicate.is_true:
+        _sr_forbids_eq_topic_forever_all(builders, a, b)
+    else:
+        _sr_forbids_eq_topic_forever_some(builders, a, b)
+
+def _sr_forbids_eq_topic_forever_all(builders, a, b):
+    # allows 0 or 1 messages on topic
+    new_builders = []
+    for builder in builders:
+        # start by counting mandatory triggers
+        k = None
+        for i in range(len(builder.segments)):
+            n = builder.segments[i].publishes_topic(a.topic)
+            if n > 1:
+                raise ContradictionError()
+            if n == 1:
+                if k is not None:
+                    raise ContradictionError()
+                k = i
+        if k is not None:
+            # allow only that event
+            builder.forbid_up_to(k, a.topic, a.predicate)
+            builder.forbid_from(k, b.topic, b.predicate)
+            continue # nothing else to do for this schema
+        else:
+            # explore every possible segment
+            # change root schema - 0 events
+            builder.forbid_everywhere(a.topic, a.predicate)
+            # add exactly 1 event per trace, at every point
+            for i in range(len(builder.segments)):
+                new = builder.duplicate()
+                new.segments[i].publish(a.topic, a.predicate)
+                new_builders.append(new)
+    builders.extend(new_builders)
+
+def _sr_forbids_eq_topic_forever_some(builders, a, b):
+    # the first message forbids some messages forever
+    new_builders = []
+    for builder in builders:
+        # find the first mandatory trigger
+        for k in range(len(builder.segments)):
+            if builder.segments[k].publishes_topic(a.topic):
+                # forbid from that point onward
+                builder.forbid_from(k, b.topic, b.predicate)
+                break
+        for i in range(k):
+            # explore forks up until first mandatory trigger (if any)
+            pass # TODO
+    builders.extend(new_builders)
+
+def _sr_forbids_eq_topic_interval(builders, a, b, t):
+    assert a.topic == b.topic
+    assert a.predicate.is_vacuous and a.predicate.is_true
+    return
+
+
+    for builder in builders:
+        # start by counting mandatory triggers
+        mandatory = []
+        for i in range(len(builder.segments)):
+            n = builder.segments[i].publishes_topic(a.topic)
+            if n:
+                mandatory.append((i, n))
+        # forbids forever
+        if len(mandatory) > 1:
+            if a.topic == b.topic:
+                # assuming predicate is True
+                raise StrategyError.unsat_axiom(axiom)
+        if len(mandatory) == 1:
+            i, n = mandatory[0]
+            if a.topic == b.topic:
+                if n > 1:
+                    # assuming predicate is True
+                    raise StrategyError.unsat_axiom(axiom)
+                # else: allow only that event
+                builder.forbid_up_to(i, a.topic, a.predicate)
+                builder.forbid_from(i, b.topic, b.predicate)
+                continue # nothing else to do for this schema
 
 
 ################################################################################
@@ -432,6 +553,18 @@ class TestSchemaBuilder(object):
     def forbid(self, topic, predicate):
         self.segments[-1].forbid(topic, predicate)
 
+    def forbid_everywhere(self, topic, predicate):
+        for segment in self.segments:
+            segment.forbid(topic, predicate)
+
+    def forbid_up_to(self, i, topic, predicate):
+        for j in range(0, i):
+            self.segments[j].forbid(topic, predicate)
+
+    def forbid_from(self, i, topic, predicate):
+        for j in range(i, len(self.segments)):
+            self.segments[j].forbid(topic, predicate)
+
     def build(self, all_topics, alias_types, inf=INT_INF):
         # all_topics: {topic: (ros_type, assumption)}
         # alias_types: {alias: ros_type}
@@ -492,10 +625,40 @@ class TraceSegmentBuilder(object):
     def has_forbid_events(self):
         return len(self.forbid_events) > 0
 
+    def publishes_topic(self, topic):
+        n = 0
+        for event in self.publish_events:
+            if event.topic == topic:
+                n += 1
+        return n
+
+    def forbids_topic(self, topic):
+        n = 0
+        for event in self.forbid_events:
+            if event.topic == topic:
+                n += 1
+        return n
+
     def publish(self, topic, predicate, alias=None):
         self.publish_events.append(self.MsgEvent(topic, predicate, alias))
 
     def forbid(self, topic, predicate):
+        if predicate.is_vacuous:
+            if predicate.is_false:
+                return
+            assert predicate.is_true
+            # subsumes all other occurrences
+            for i in range(len(self.forbid_events) - 1, -1, -1):
+                if self.forbid_events[i].topic == topic:
+                    del self.forbid_events[i]
+        else:
+            for event in self.forbid_events:
+                if event.topic != topic:
+                    continue
+                if not event.predicate.is_vacuous:
+                    continue
+                if event.predicate.is_true:
+                    return # subsumed
         self.forbid_events.append(self.MsgEvent(topic, predicate, None))
 
     def event_strategies(self, all_topics, alias_types, name='segment'):

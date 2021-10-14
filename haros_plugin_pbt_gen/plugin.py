@@ -506,6 +506,8 @@ class TestGenerator(object):
                 continue
             a = p.pattern.trigger
             b = p.pattern.behaviour
+            assert a.is_simple_event
+            assert b.is_simple_event
             if not a.topic in self.subbed_topics:
                 continue
             if not b.topic in self.subbed_topics:

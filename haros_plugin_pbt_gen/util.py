@@ -34,6 +34,10 @@ class StrategyError(Exception):
         return cls('unsatisfiable predicate{}{}'.format(str_topic, str_type))
 
     @classmethod
+    def unsat_axiom(cls, axiom):
+        return cls('unsatisfiable axiom: ' + str(axiom))
+
+    @classmethod
     def not_open_sub(cls, topic):
         return cls('not an open subscribed topic: ' + topic)
 
