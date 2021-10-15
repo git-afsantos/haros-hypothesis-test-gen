@@ -153,12 +153,12 @@ def _sr_forbids_eq_topic_forever_all(builders, a, b):
 
 def _sr_forbids_eq_topic_forever_some(builders, a, b):
     # the first message forbids some messages forever
-    new_builders = []
     for builder in builders:
         # find the first mandatory trigger
         for k in range(len(builder.segments)):
             if builder.segments[k].publishes_topic(a.topic):
                 break
+        new_builders = []
         for i in range(k):
             # explore forks up until first mandatory trigger (if any)
             new = builder.duplicate()
@@ -182,13 +182,82 @@ def _sr_forbids_eq_topic_forever_some(builders, a, b):
             for new in new_builders:
                 new.segments[i].refine_published(b.topic, restriction)
             builder.segments[i].refine_published(b.topic, restriction)
-    builders.extend(new_builders)
+        builders.extend(new_builders)
 
 def _sr_forbids_eq_topic_interval(builders, a, b, t):
     assert a.topic == b.topic
     assert a.predicate.is_vacuous and a.predicate.is_true
-    return
+    assert not b.predicate.is_vacuous or b.predicate.is_true
+    assert t > 0 and t < INF
+    if b.predicate.is_vacuous and b.predicate.is_true:
+        _sr_forbids_eq_topic_interval_all(builders, a, b, t)
+    else:
+        _sr_forbids_eq_topic_interval_some(builders, a, b, t)
 
+def _sr_forbids_eq_topic_interval_all(builders, a, b, t):
+    # there is no more than 1 message on topic per `t` time
+    # NOTE: infinite schemas, in general; some cases left for eval
+    assert a.topic == b.topic
+    assert a.predicate.is_vacuous and a.predicate.is_true
+    assert b.predicate.is_vacuous and b.predicate.is_true
+    assert t > 0 and t < INF
+    for builder in builders:
+        if len(builder.segments) < 1:
+            continue
+        # handle mandatory events first
+        s = builder.segments[0]
+        t_rem = -1
+        # is trigger published in the first segment?
+        published = s.publishes_topic(a.topic)
+        # no more than one message
+        if published > 1:
+            raise ContradictionError()
+        if published == 1:
+            s.forbid(b.topic, b.predicate)
+            t_rem = int(t * 1000) # milliseconds
+        for i in range(1, len(builder.segments)):
+            s = builder.segments[i]
+            published = s.publishes_topic(a.topic)
+            # no more than one message
+            if published > 1:
+                raise ContradictionError()
+            # is this segment under restriction?
+            if t_rem > 0:
+                s.forbid(b.topic, b.predicate)
+                if published:
+                    if s.is_bounded:
+                        if s.upper_bound <= t_rem:
+                            # restriction goes beyond this segment
+                            # unable to push boundaries
+                            raise ContradictionError()
+                        else:
+                            # push lower bound
+                            s.lower_bound = t_rem
+                            t_rem = 0
+                    else:
+                        # push lower bound
+                        s.lower_bound = t_rem
+                        t_rem = 0
+                    # renew restriction
+                    t_rem = t
+                else:
+                    pass # fork? split segment?
+            else:
+                pass
+                t_rem -= s.upper_bound
+        # is trigger allowed in the first segment?
+        allowed = published or s.is_topic_allowed(a.topic)
+        for i in range(1, len(builder.segments)):
+            s = builder.segments[i]
+
+
+def _sr_forbids_eq_topic_interval_some(builders, a, b, t):
+    # any message on topic forbids some messages for `t` time
+    # NOTE: infinite schemas, in general; some cases left for eval
+    assert a.topic == b.topic
+    assert a.predicate.is_vacuous and a.predicate.is_true
+    assert not b.predicate.is_vacuous
+    assert t > 0 and t < INF
 
     for builder in builders:
         # start by counting mandatory triggers
@@ -665,7 +734,7 @@ class TraceSegmentBuilder(object):
 
     def forbid(self, topic, predicate):
         if predicate.is_vacuous:
-            if predicate.is_false:
+            if not predicate.is_true:
                 return
             assert predicate.is_true
             # subsumes all other occurrences
@@ -688,6 +757,10 @@ class TraceSegmentBuilder(object):
             if event.topic == topic:
                 phi = phi.join(event.predicate.negate())
         return phi
+
+    def is_topic_allowed(self, topic):
+        phi = self.get_allowed_predicate(topic)
+        return not phi.is_vacuous or phi.is_true
 
     def refine_published(self, topic, predicate):
         n = 0
