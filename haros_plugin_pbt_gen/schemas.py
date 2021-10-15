@@ -139,13 +139,16 @@ def _sr_forbids_eq_topic_forever_all(builders, a, b):
             continue # nothing else to do for this schema
         else:
             # explore every possible segment
-            # change root schema - 0 events
-            builder.forbid_everywhere(a.topic, a.predicate)
             # add exactly 1 event per trace, at every point
             for i in range(len(builder.segments)):
                 new = builder.duplicate()
-                new.segments[i].publish(a.topic, a.predicate)
-                new_builders.append(new)
+                phi = new.segments[i].get_allowed_predicate(a.topic)
+                if not phi.is_vacuous or phi.is_true:
+                    new.segments[i].publish(a.topic, phi)
+                    new.forbid_everywhere(a.topic, a.predicate)
+                    new_builders.append(new)
+            # change root schema - 0 events
+            builder.forbid_everywhere(a.topic, a.predicate)
     builders.extend(new_builders)
 
 def _sr_forbids_eq_topic_forever_some(builders, a, b):
@@ -155,12 +158,30 @@ def _sr_forbids_eq_topic_forever_some(builders, a, b):
         # find the first mandatory trigger
         for k in range(len(builder.segments)):
             if builder.segments[k].publishes_topic(a.topic):
-                # forbid from that point onward
-                builder.forbid_from(k, b.topic, b.predicate)
                 break
         for i in range(k):
             # explore forks up until first mandatory trigger (if any)
-            pass # TODO
+            new = builder.duplicate()
+            phi = new.segments[i].get_allowed_predicate(a.topic)
+            if not phi.is_vacuous or phi.is_true:
+                new.forbid_up_to(i, a.topic, a.predicate)
+                # do not forbid on `i`, to allow more than one message
+                # not needed to forbid trigger from this point onward
+                new.segments[i].publish(a.topic, phi)
+                new.forbid_from(i, b.topic, b.predicate)
+                new_builders.append(new)
+        restriction = b.predicate.negate()
+        if k < len(builder.segments):
+            # `k` only has to be refined for the forks
+            # the original schema will only publish the first trigger on `k`
+            for new in new_builders:
+                new.segments[k].refine_published(b.topic, restriction)
+            # change root schema - forbid from `k` onward
+            builder.forbid_from(k, b.topic, b.predicate)
+        for i in range(k + 1, len(builder.segments)):
+            for new in new_builders:
+                new.segments[i].refine_published(b.topic, restriction)
+            builder.segments[i].refine_published(b.topic, restriction)
     builders.extend(new_builders)
 
 def _sr_forbids_eq_topic_interval(builders, a, b, t):
@@ -660,6 +681,23 @@ class TraceSegmentBuilder(object):
                 if event.predicate.is_true:
                     return # subsumed
         self.forbid_events.append(self.MsgEvent(topic, predicate, None))
+
+    def get_allowed_predicate(self, topic):
+        phi = HplVacuousTruth() # any message allowed
+        for event in self.forbid_events:
+            if event.topic == topic:
+                phi = phi.join(event.predicate.negate())
+        return phi
+
+    def refine_published(self, topic, predicate):
+        n = 0
+        for i in range(len(self.publish_events)):
+            event = self.publish_events[i]
+            if event.topic == topic:
+                phi = event.predicate.join(predicate)
+                self.publish_events[i] = event._replace(predicate=phi)
+                n += 1
+        return n # how many events were changed
 
     def event_strategies(self, all_topics, alias_types, name='segment'):
         # all_topics: {topic: (ros_type, assumption)}
