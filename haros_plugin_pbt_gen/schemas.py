@@ -201,54 +201,56 @@ def _sr_forbids_eq_topic_interval_all(builders, a, b, t):
     assert a.predicate.is_vacuous and a.predicate.is_true
     assert b.predicate.is_vacuous and b.predicate.is_true
     assert t > 0 and t < INF
+    t = int(t * 1000) # milliseconds
     for builder in builders:
         if len(builder.segments) < 1:
             continue
         # handle mandatory events first
-        s = builder.segments[0]
-        t_rem = -1
-        # is trigger published in the first segment?
-        published = s.publishes_topic(a.topic)
-        # no more than one message
-        if published > 1:
-            raise ContradictionError()
-        if published == 1:
-            s.forbid(b.topic, b.predicate)
-            t_rem = int(t * 1000) # milliseconds
-        for i in range(1, len(builder.segments)):
-            s = builder.segments[i]
+        t_rem = 0
+        for s in builder.segments:
             published = s.publishes_topic(a.topic)
             # no more than one message
             if published > 1:
                 raise ContradictionError()
             # is this segment under restriction?
             if t_rem > 0:
-                s.forbid(b.topic, b.predicate)
                 if published:
-                    if s.is_bounded:
-                        if s.upper_bound <= t_rem:
-                            # restriction goes beyond this segment
-                            # unable to push boundaries
-                            raise ContradictionError()
-                        else:
-                            # push lower bound
-                            s.lower_bound = t_rem
-                            t_rem = 0
-                    else:
-                        # push lower bound
-                        s.lower_bound = t_rem
-                        t_rem = 0
-                    # renew restriction
-                    t_rem = t
+                    if s.is_bounded and s.upper_bound <= t_rem:
+                        # restriction goes beyond this segment
+                        # unable to push boundaries
+                        raise ContradictionError()
+                    s.lower_bound = t_rem # push lower bound
                 else:
-                    pass # fork? split segment?
-            else:
-                pass
-                t_rem -= s.upper_bound
-        # is trigger allowed in the first segment?
-        allowed = published or s.is_topic_allowed(a.topic)
-        for i in range(1, len(builder.segments)):
-            s = builder.segments[i]
+                    s.forbid(b.topic, b.predicate)
+                    # discount upper bound and trim examples with eval
+                    if s.is_bounded:
+                        t_rem -= s.upper_bound
+                    else:
+                        t_rem = 0
+            if published:
+                s.forbid(b.topic, b.predicate) # no random messages
+                t_rem = t # apply restriction onward
+        # handle optional events
+        # in segments with mandatory triggers, random ones are not allowed
+        # TODO
+        #new_builders = []
+        #was_allowed = False
+        # the last segment does not matter
+        #for i in range(len(builder.segments) - 1):
+        #    s = builder.segments[i]
+        #    s2 = builder.segments[i+1]
+        #    allowed = s.is_topic_allowed(a.topic)
+        #    if allowed:
+        #        if s2.publishes_topic(b.topic):
+        #            # split into case of zero and case of one
+        #            new = builder.duplicate()
+        #            changed = new.split_segment_at(i+1, t, l=False, r=True)
+        #            if changed:
+        #                s.forbid(a.topic, a.predicate)
+        #                new.segments[i]
+        #            # else: let eval figure it out
+        #    was_allowed = allowed
+        #builders.extend(new_builders)
 
 
 def _sr_forbids_eq_topic_interval_some(builders, a, b, t):
@@ -258,29 +260,7 @@ def _sr_forbids_eq_topic_interval_some(builders, a, b, t):
     assert a.predicate.is_vacuous and a.predicate.is_true
     assert not b.predicate.is_vacuous
     assert t > 0 and t < INF
-
-    for builder in builders:
-        # start by counting mandatory triggers
-        mandatory = []
-        for i in range(len(builder.segments)):
-            n = builder.segments[i].publishes_topic(a.topic)
-            if n:
-                mandatory.append((i, n))
-        # forbids forever
-        if len(mandatory) > 1:
-            if a.topic == b.topic:
-                # assuming predicate is True
-                raise StrategyError.unsat_axiom(axiom)
-        if len(mandatory) == 1:
-            i, n = mandatory[0]
-            if a.topic == b.topic:
-                if n > 1:
-                    # assuming predicate is True
-                    raise StrategyError.unsat_axiom(axiom)
-                # else: allow only that event
-                builder.forbid_up_to(i, a.topic, a.predicate)
-                builder.forbid_from(i, b.topic, b.predicate)
-                continue # nothing else to do for this schema
+    # TODO
 
 
 ################################################################################
@@ -654,6 +634,30 @@ class TestSchemaBuilder(object):
     def forbid_from(self, i, topic, predicate):
         for j in range(i, len(self.segments)):
             self.segments[j].forbid(topic, predicate)
+
+    def split_segment_at(self, i, t, l=True, r=True):
+        # l: keep publish_events to the left
+        # r: keep publish_events to the right
+        # l and r: duplicate publish_events
+        # not l and not r: drop all publish_events
+        segment = self.segments[i]
+        if segment.is_bounded and segment.upper_bound <= t:
+            return False
+        if segment.lower_bound >= t:
+            return False
+        assert segment.lower_bound < t
+        assert not segment.is_bounded or segment.upper_bound > t
+        new = segment.duplicate()
+        new.lower_bound = 0
+        segment.upper_bound = t
+        if new.is_bounded:
+            new.upper_bound -= t
+        if not l:
+            segment.publish_events = []
+        if not r:
+            new.publish_events = []
+        self.segments.insert(i + 1, new)
+        return True
 
     def build(self, all_topics, alias_types, inf=INT_INF):
         # all_topics: {topic: (ros_type, assumption)}
