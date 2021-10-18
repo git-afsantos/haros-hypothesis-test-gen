@@ -202,9 +202,12 @@ def _sr_forbids_eq_topic_interval_all(builders, a, b, t):
     assert b.predicate.is_vacuous and b.predicate.is_true
     assert t > 0 and t < INF
     t = int(t * 1000) # milliseconds
+    new_builders = []
     for builder in builders:
         if len(builder.segments) < 1:
             continue
+        copy = builder.duplicate()
+        changed = False
         # handle mandatory events first
         t_rem = 0
         for s in builder.segments:
@@ -221,7 +224,11 @@ def _sr_forbids_eq_topic_interval_all(builders, a, b, t):
                         raise ContradictionError()
                     s.lower_bound = t_rem # push lower bound
                 else:
+                    # forbid at lower bound for sure
+                    # FIXME if upper bound is greater, it should split
+                    # and alleviate the restriction
                     s.forbid(b.topic, b.predicate)
+                    changed = True
                     # discount upper bound and trim examples with eval
                     if s.is_bounded:
                         t_rem -= s.upper_bound
@@ -229,7 +236,10 @@ def _sr_forbids_eq_topic_interval_all(builders, a, b, t):
                         t_rem = 0
             if published:
                 s.forbid(b.topic, b.predicate) # no random messages
+                changed = True
                 t_rem = t # apply restriction onward
+        if changed:
+            new_builders.append(copy)
         # handle optional events
         # in segments with mandatory triggers, random ones are not allowed
         # TODO
@@ -250,7 +260,7 @@ def _sr_forbids_eq_topic_interval_all(builders, a, b, t):
         #                new.segments[i]
         #            # else: let eval figure it out
         #    was_allowed = allowed
-        #builders.extend(new_builders)
+    builders.extend(new_builders)
 
 
 def _sr_forbids_eq_topic_interval_some(builders, a, b, t):
