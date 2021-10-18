@@ -224,16 +224,18 @@ def _sr_forbids_eq_topic_interval_all(builders, a, b, t):
                         raise ContradictionError()
                     s.lower_bound = t_rem # push lower bound
                 else:
-                    # forbid at lower bound for sure
-                    # FIXME if upper bound is greater, it should split
-                    # and alleviate the restriction
-                    s.forbid(b.topic, b.predicate)
-                    changed = True
-                    # discount upper bound and trim examples with eval
-                    if s.is_bounded:
+                    if s.is_bounded and s.upper_bound <= t_rem:
+                        changed = True
+                        s.forbid(b.topic, b.predicate)
                         t_rem -= s.upper_bound
                     else:
                         t_rem = 0
+                        if s.is_topic_allowed(a.topic):
+                            # FIXME: it should split and alleviate the forbid
+                            #   after the timeout, but there's no sure way of
+                            #   splitting mandatory events on other topics.
+                            # discount upper bound and trim examples with eval
+                            pass
             if published:
                 s.forbid(b.topic, b.predicate) # no random messages
                 changed = True
