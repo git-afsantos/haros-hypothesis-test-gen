@@ -74,8 +74,12 @@ def _setup_test(self):
     m.on_success = self._on_early_success
         {% endif %}
     m.on_violation = partial(self._on_property_violation, m, False)
+        {% set registered = [] %}
         {% for event in monitor.events %}
+            {% if not event.topic in registered %}
+                {% set _x = registered.append(event.topic) %}
     self.subs["{{ event.topic }}"].add(m.on_msg_{{ event.topic.replace('/', '_')}})
+            {% endif %}
         {% endfor %}
     {% endfor %}
     self.axioms = []
@@ -83,8 +87,12 @@ def _setup_test(self):
     m = {{ monitor.class_name }}()
     self.axioms.append(m)
     m.on_violation = partial(self._on_property_violation, m, True)
+        {% set registered = [] %}
         {% for event in monitor.events %}
+            {% if not event.topic in registered %}
+                {% set _x = registered.append(event.topic) %}
     self.subs["{{ event.topic }}"].add(m.on_msg_{{ event.topic.replace('/', '_')}})
+            {% endif %}
         {% endfor %}
     {% endfor %}
     self.launches = []
