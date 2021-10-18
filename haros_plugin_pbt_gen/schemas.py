@@ -87,7 +87,7 @@ def _sr_forbids(builders, axiom):
     assert axiom.pattern.is_prevention
     a = axiom.pattern.trigger
     b = axiom.pattern.behaviour
-    t = axiom.max_time
+    t = axiom.pattern.max_time
     assert a.is_simple_event
     assert b.is_simple_event
     if not a.predicate.is_vacuous:
