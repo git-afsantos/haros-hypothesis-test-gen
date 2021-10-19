@@ -496,6 +496,10 @@ class TestTracer(unittest.TestCase):
                 else:
                     raise LookupError("Failed to kill nodes " + str(pending))
             pending = [n for n in get_node_names() if n in self.NODES]
+            try:
+                pending.remove("/rosout")
+            except ValueError:
+                pass
             if not online: # exclude self
                 while now < end and len(pending) > 1 and not rospy.is_shutdown():
                     rate.sleep()
