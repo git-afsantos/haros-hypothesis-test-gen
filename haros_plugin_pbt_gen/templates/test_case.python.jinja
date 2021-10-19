@@ -108,6 +108,8 @@ def _setup_test(self):
 
 {% macro _setup_sut(commands, settings) %}
 def _setup_sut(self):
+    global test_status_message
+    test_status_message = 'Launching'
     self.launch_time = get_time()
     self.deadline = self.launch_time + {# defaults to 15 seconds -#}
         {{ settings['deadline']|d(15, true) }}
@@ -269,10 +271,16 @@ class TestTracer(unittest.TestCase):
 
     def test_properties(self):
         # test once that the SUT is OK, before Hypothesis begins its loop
+        global test_status_message
+        global test_status_running
+        test_status_running = True
+        test_status_message = 'Start'
         try:
             self._setup_sut()
+            rospy.sleep(1.0)
         finally:
             self._teardown_sut()
+            rospy.sleep(1.0)
         try:
             self.n_examples = 0
             self.n_fail = 0
@@ -280,6 +288,8 @@ class TestTracer(unittest.TestCase):
             self.n_shrinks = 0
             self._test_hypothesis_properties()
         finally:
+            test_status_running = False
+            test_status_message = 'Statistics'
             if self.first_fail is not None:
                 self.n_shrinks = self.n_examples - self.first_fail
             self.json_stats = {
@@ -315,6 +325,8 @@ class TestTracer(unittest.TestCase):
     def _run_example(self, trace):
         if rospy.is_shutdown():
             return
+        global test_status_message
+        test_status_message = 'Example #{} - Setup'.format(self.n_examples + 1)
         self._eval_trace(trace)
         passed = False
         self.n_examples += 1
@@ -327,6 +339,7 @@ class TestTracer(unittest.TestCase):
         if rospy.is_shutdown():
             return
         try:
+            test_status_message = 'Example - Replay'
             self.trace_start_time = get_time()
             time_prev = self.trace_start_time
             self._update(time_now=time_prev)
@@ -350,6 +363,7 @@ class TestTracer(unittest.TestCase):
             time_now = get_time()
             self._update(time_now=time_now)
             # self._check_outcome(trace)
+            test_status_message = 'Example - Wait'
             while time_now < self.deadline and mon.is_falsifiable_state:
                 rate.sleep()
                 time_now = get_time()
@@ -363,6 +377,7 @@ class TestTracer(unittest.TestCase):
             passed = True
             print("[Example #{}]: OK".format(self.n_examples))
         finally:
+            test_status_message = 'Example - Report'
             time_now = get_time()
             t_test = time_now - self.launch_time
             t_trace = time_now - self.trace_start_time
@@ -395,6 +410,8 @@ class TestTracer(unittest.TestCase):
 {{ _setup_sut(commands, settings)|indent(width=4, first=true) }}
 
     def _teardown_sut(self):
+      global test_status_message
+      test_status_message = 'Teardown SUT'
         with HiddenPrints():
             for launch in self.launches:
                 launch.shutdown()
@@ -447,9 +464,12 @@ class TestTracer(unittest.TestCase):
         self.monitor_active = False
 
     def _wait_for_nodes(self, timeout=60.0, online=True):
+        global test_status_message
         if online:
+            test_status_message = 'Waiting - SUT Online'
             rospy.logdebug("Waiting for the SUT to start")
         else:
+            test_status_message = 'Waiting - SUT Offline'
             rospy.logdebug("Waiting for the SUT to shut down")
         now = get_time()
         rate = rospy.Rate(20)

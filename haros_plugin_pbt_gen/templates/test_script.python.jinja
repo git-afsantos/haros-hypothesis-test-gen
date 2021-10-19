@@ -41,6 +41,7 @@ import rospy
 import roslaunch
 from rosnode import get_node_names, rosnode_ping, kill_nodes, ROSNodeException
 from rospy import Publisher, Subscriber, SubscribeListener
+import std_srvs.srv as std_srvs
 
 {% for pkg_name in pkg_imports %}
 import {{ pkg_name }}.msg as {{ pkg_name }}
@@ -311,10 +312,16 @@ class TestSubscriber(object):
 ################################################################################
 
 mode_random = False
+test_status_running = False
+test_status_message = 'Uninitialized'
+
+def _status_srv_callback(_req):
+    return std_srvs.TriggerResponse(test_status_running, test_status_message)
 
 def main(args):
     # {{ property_text }}
-    rospy.init_node("property_tester", log_level=rospy.{{ log_level }})
+    rospy.init_node('property_tester', log_level=rospy.{{ log_level }})
+    srv = rospy.Service('status', std_srvs.Trigger, _status_srv_callback)
     if args:
         if args[0] == 'random':
             global mode_random
