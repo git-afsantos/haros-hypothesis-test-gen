@@ -50,11 +50,13 @@
 # ---- mandatory events ----
 {% for msg_strategy in published %}
 {{ _gen_msg(msg_strategy) }}{# -#}
+rec = MsgRecord('{{ msg_strategy.topic }}', {# -#}
   {% if loop.index0 == 0 %}
-rec = MsgRecord('{{ msg_strategy.topic }}', timestamps[{{ i }}], msg)
+    timestamps[{{ i }}], {# -#}
   {% else %}
-rec = MsgRecord('{{ msg_strategy.topic }}', 0, msg)
+    0, {# -#}
   {% endif %}
+msg)
 {# -#}
 trace.append(rec){# -#}
 {% else %}
