@@ -49,7 +49,7 @@
 {% macro _gen_mandatory_events(published, i) -%}
 # ---- mandatory events ----
 {% for msg_strategy in published %}
-{{ _gen_msg(msg_strategy) }}{# -#}
+{{ _gen_msg(msg_strategy) }}
 rec = MsgRecord('{{ msg_strategy.topic }}', {# -#}
   {% if loop.index0 == 0 %}
     timestamps[{{ i }}], {# -#}
