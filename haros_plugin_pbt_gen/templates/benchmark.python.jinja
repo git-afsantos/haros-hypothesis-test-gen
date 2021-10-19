@@ -18,7 +18,7 @@
 from __future__ import print_function, unicode_literals
 import io
 import os
-from subprocess import check_output, STDOUT
+from subprocess import Popen, STDOUT
 import sys
 
 
@@ -28,15 +28,32 @@ import sys
 
 def _run_test(filepath):
     cmd = ["python", filepath, "json", "csv"]
+    proc = None
     try:
-        output = check_output(cmd, stderr=STDOUT)
+        with open(os.devnull, "wb") as DEVNULL:
+            proc = Popen(cmd, stdout=DEVNULL, stderr=STDOUT)
+            proc.wait()
+        assert proc.returncode is not None
+        if proc.returncode != 0:
+            print("ERROR: subprocess return code:", proc.returncode)
+            return None
+    except KeyboardInterrupt as keyint:
+        print("Interrupted.")
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+        raise keyint
     except Exception as e:
         print("ERROR:", e)
+        return None
     assert filepath.endswith(".py")
-    filepath = os.path.basename(filepath)[:-3] + ".csv"
-    with io.open(filepath, "r", encoding="utf-8") as f:
-        data = f.readlines()[1].rstrip()
-    return data
+    try:
+        filepath = os.path.basename(filepath)[:-3] + ".csv"
+        with io.open(filepath, "r", encoding="utf-8") as f:
+            data = f.readlines()[1].rstrip()
+        return data
+    except Exception as e:
+        print("ERROR retrieving test statistics:", e)
+        return None
 
 
 ###############################################################################
@@ -71,17 +88,23 @@ def main():
     results = []
     this_dir = os.path.dirname(os.path.realpath(__file__))
     this_file = os.path.basename(__file__)
-    for root, directories, filenames in os.walk(this_dir):
-        for filename in filenames:
-            if filename.endswith(".py"):
-                if filename == this_file:
-                    continue
-                filepath = os.path.join(root, filename)
-                print("Running Test #{}".format(len(results) + 1))
-                print("  >>", filepath)
-                stats = _run_test(filepath)
-                print("Done.")
-                results.append(stats)
+    try:
+        for root, directories, filenames in os.walk(this_dir):
+            for filename in filenames:
+                if filename.endswith(".py"):
+                    if filename == this_file:
+                        continue
+                    filepath = os.path.join(root, filename)
+                    print("Running Test #{}".format(len(results) + 1))
+                    print("  >>", filepath)
+                    stats = _run_test(filepath)
+                    if stats is None:
+                        print("Skipping statistics.")
+                        continue
+                    print("Done.")
+                    results.append(stats)
+    except KeyboardInterrupt:
+        pass
     print("Writing final results in CSV file...")
     try:
         _output_results(results)
