@@ -50,7 +50,7 @@
 # ---- mandatory events ----
 {% for msg_strategy in published %}
 {{ _gen_msg(msg_strategy) }}{# -#}
-  {% if loop.first %}
+  {% if loop.index0 == 0 %}
 rec = MsgRecord('{{ msg_strategy.topic }}', timestamps[{{ i }}], msg)
   {% else %}
 rec = MsgRecord('{{ msg_strategy.topic }}', 0, msg)
