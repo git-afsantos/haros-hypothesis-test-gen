@@ -11,7 +11,7 @@
 {# Test Case Macros #}
 {##############################################################################}
 
-{% macro _unittest_setup(publishers, subscribers) %}
+{% macro _unittest_setup(publishers, subscribers, main_monitor) %}
 def setUp(self):
     unittest.TestCase.setUp(self)
     self.trace_start_time = 0
@@ -55,6 +55,8 @@ def setUp(self):
         "avg_time_trace": None,
         "avg_time_setup": None,
         "size_counterexample": None,
+        "property": "{{ main_monitor.hpl_string }}",
+        "script": __file__,
     }
 {% endmacro %}
 
@@ -264,7 +266,7 @@ class TestTracer(unittest.TestCase):
     output_json = False
     output_csv = False
 
-{{ _unittest_setup(publishers, subscribers)|indent(width=4, first=true) }}
+{{ _unittest_setup(publishers, subscribers, main_monitor)|indent(width=4, first=true) }}
 
     def tearDown(self):
         unittest.TestCase.tearDown(self)
@@ -678,7 +680,8 @@ class TestTracer(unittest.TestCase):
             "Trace duration (s)",
             "Setup/Teardown time (s)",
             "Input trace size (messages)",
-            "Excess Messages",
+            "Property",
+            "Script",
         )
         data = (
             str(self.n_examples),
@@ -690,7 +693,8 @@ class TestTracer(unittest.TestCase):
             str(self.avg_time_trace),
             str(self.avg_time_setup),
             str(self.counterexample_size),
-            "?",
+            "{{ main_monitor.hpl_string }}",
+            __file__,
         )
         filename = os.path.splitext(os.path.basename(__file__))[0] + '.csv'
         columns = ",".join(columns)

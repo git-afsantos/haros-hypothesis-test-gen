@@ -71,7 +71,8 @@ def _output_results(results):
         "Trace duration (s)",
         "Setup/Teardown time (s)",
         "Input trace size (messages)",
-        "Excess Messages",
+        "Property",
+        "Script",
     ))
     with io.open("benchmark.csv", "w", encoding="utf-8") as f:
         f.write(columns + "\n")
