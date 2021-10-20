@@ -28,11 +28,12 @@ from math import (
     atan, atan2, cos, sin, tan, degrees, radians,
 )
 import os
+import signal
+import sys
 from threading import Lock
 from time import time as get_time
 import unittest
 import warnings
-import sys
 
 from hypothesis import assume, given, HealthCheck, note, settings
 from hypothesis.errors import UnsatisfiedAssumption
@@ -328,8 +329,13 @@ def _unstuck_srv_callback(_req):
     request_unstuck = True
     return std_srvs.EmptyResponse()
 
+def _handle_pdb(sig, frame):
+    import pdb
+    pdb.Pdb().set_trace(frame)
+
 def main(args):
     # {{ property_text }}
+    signal.signal(signal.SIGUSR1, _handle_pdb)
     rospy.init_node('property_tester', log_level=rospy.{{ log_level }})
     srv1 = rospy.Service('~status', std_srvs.Trigger, _status_srv_callback)
     srv2 = rospy.Service('~unstuck', std_srvs.Empty, _unstuck_srv_callback)
