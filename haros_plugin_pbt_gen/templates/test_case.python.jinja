@@ -556,6 +556,7 @@ class TestTracer(unittest.TestCase):
                     raise LookupError("Failed to kill nodes " + str(pending))
 
     def _wait_for_interfaces(self, timeout=10.0):
+        global request_unstuck
         rospy.logdebug("Waiting for publishers and subscribers")
         now = get_time()
         rate = rospy.Rate(20)
