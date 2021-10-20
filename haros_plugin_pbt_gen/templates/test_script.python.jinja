@@ -329,6 +329,7 @@ def _unstuck_srv_callback(_req):
     request_unstuck = True
     return std_srvs.EmptyResponse()
 
+# send me a SIGUSR1 with `kill -SIGUSR1 <PID>`
 def _handle_pdb(sig, frame):
     import pdb
     pdb.Pdb().set_trace(frame)
