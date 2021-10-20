@@ -487,7 +487,7 @@ class TestTracer(unittest.TestCase):
     def _wait_for_nodes(self, timeout=60.0, online=True):
         global request_unstuck
         global test_status_message
-        pat = 'Waiting - SUT {} ({{}})'.format('Online' if online else 'Offline')
+        pat = 'Waiting - SUT ' + ('Online' if online else 'Offline') + ' ({})'
         if online:
             rospy.logdebug("Waiting for the SUT to start")
         else:
