@@ -422,6 +422,7 @@ class TestTracer(unittest.TestCase):
                 self.n_failed_assumptions += 1
                 print("[Example #{}]: INVALID".format(self.n_examples))
             self._teardown_sut()
+            test_status_message = 'Example #{} - Done'.format(self.n_examples)
 
 {{ _eval_trace(axioms)|indent(width=4, first=true) }}
 
