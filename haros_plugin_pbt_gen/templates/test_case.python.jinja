@@ -172,13 +172,19 @@ COMMON_HYPOTHESIS_SETTINGS = {
 @settings(**COMMON_HYPOTHESIS_SETTINGS)
 @given(trace=traces)
 def _test_random_schema(self, trace):
-    self._run_example(trace)
+    try:
+        self._run_example(trace)
+    except UnstuckRequestError:
+        print("[Unstuck Request]")
 {% for schema in schemas %}
 
 @settings(**COMMON_HYPOTHESIS_SETTINGS)
 @given(trace=schema_{{ schema.name }}())
 def _test_schema_{{ schema.name }}(self, trace):
-    self._run_example(trace)
+    try:
+        self._run_example(trace)
+    except UnstuckRequestError:
+        print("[Unstuck Request]")
 {% endfor %}
 {% endmacro %}
 
@@ -325,11 +331,13 @@ class TestTracer(unittest.TestCase):
     def _run_example(self, trace):
         if rospy.is_shutdown():
             return
+        global request_unstuck
         global test_status_message
-        test_status_message = 'Example #{} - Setup'.format(self.n_examples + 1)
+        test_status_message = 'Example #{} - Eval Trace'.format(self.n_examples + 1)
         self._eval_trace(trace)
         passed = False
         self.n_examples += 1
+        test_status_message = 'Example #{} - Setup'.format(self.n_examples + 1)
         self._setup_test()
         print("[Example #{}]: Selected schema #{}".format(
             self.n_examples, trace.schema))
@@ -339,7 +347,7 @@ class TestTracer(unittest.TestCase):
         if rospy.is_shutdown():
             return
         try:
-            test_status_message = 'Example - Replay'
+            test_status_message = 'Example #{} - Replay'.format(self.n_examples)
             self.trace_start_time = get_time()
             time_prev = self.trace_start_time
             self._update(time_now=time_prev)
@@ -354,6 +362,9 @@ class TestTracer(unittest.TestCase):
                         self._update(time_now=time_now)
                         rate.sleep()
                         time_now = get_time()
+                        if request_unstuck:
+                            request_unstuck = False
+                            raise UnstuckRequestError()
                 self._update(time_now=time_now)
                 self.pub_log.append(MsgRecord(event.topic, time_now, event.msg))
                 self.pubs[event.topic].publish(event.msg, time=time_now)
@@ -368,6 +379,9 @@ class TestTracer(unittest.TestCase):
                 rate.sleep()
                 time_now = get_time()
                 self._update(time_now=time_now)
+                if request_unstuck:
+                    request_unstuck = False
+                    raise UnstuckRequestError()
             assert mon.verdict is not False, mon.HPL_PROPERTY
             passed = True
             print("[Example #{}]: OK".format(self.n_examples))
@@ -376,8 +390,12 @@ class TestTracer(unittest.TestCase):
         except EarlySuccess:
             passed = True
             print("[Example #{}]: OK".format(self.n_examples))
+        except UnstuckRequestError as ure:
+            passed = True
+            self.assumptions_ok = False
+            raise ure
         finally:
-            test_status_message = 'Example - Report'
+            test_status_message = 'Example #{} - Report'.format(self.n_examples)
             time_now = get_time()
             t_test = time_now - self.launch_time
             t_trace = time_now - self.trace_start_time
@@ -411,11 +429,12 @@ class TestTracer(unittest.TestCase):
 
     def _teardown_sut(self):
         global test_status_message
-        test_status_message = 'Teardown SUT'
         with HiddenPrints():
+            test_status_message = 'Teardown SUT (launch shutdown)'
             for launch in self.launches:
                 launch.shutdown()
             try:
+                test_status_message = 'Teardown SUT (kill nodes)'
                 kill_nodes(self.NODES)
             except ROSNodeException as e:
                 if e.message.startswith("Unknown node"):
@@ -464,18 +483,22 @@ class TestTracer(unittest.TestCase):
         self.monitor_active = False
 
     def _wait_for_nodes(self, timeout=60.0, online=True):
+        global request_unstuck
         global test_status_message
+        pat = 'Waiting - SUT {} ({{}})'.format('Online' if online else 'Offline')
         if online:
-            test_status_message = 'Waiting - SUT Online'
             rospy.logdebug("Waiting for the SUT to start")
         else:
-            test_status_message = 'Waiting - SUT Offline'
             rospy.logdebug("Waiting for the SUT to shut down")
         now = get_time()
         rate = rospy.Rate(20)
+        test_status_message = pat.format('init clock')
         while now == 0.0 and not rospy.is_shutdown():
             rate.sleep()
             now = get_time()
+            if request_unstuck:
+                request_unstuck = False
+                raise UnstuckRequestError()
         end = now + timeout
         pending = list(self.NODES)
         try:
@@ -483,12 +506,17 @@ class TestTracer(unittest.TestCase):
         except NameError:
             pass # Python 2
         with HiddenPrints():
+            test_status_message = pat.format(pending)
             while now < end and pending and not rospy.is_shutdown():
                 node_name = pending.pop()
                 if not rosnode_ping(node_name, max_count=1) is online:
                     pending.append(node_name)
                     rate.sleep()
                 now = get_time()
+                test_status_message = pat.format(pending)
+                if request_unstuck:
+                    request_unstuck = False
+                    raise UnstuckRequestError()
         if not rospy.is_shutdown():
             if pending:
                 if online:
@@ -500,11 +528,29 @@ class TestTracer(unittest.TestCase):
                 pending.remove("/rosout")
             except ValueError:
                 pass
-            if not online: # exclude self
-                while now < end and len(pending) > 1 and not rospy.is_shutdown():
+            try:
+                pending.remove(rospy.get_name())
+            except ValueError:
+                pass
+            if not online:
+                test_status_message = pat.format(pending)
+                while now < end and pending and not rospy.is_shutdown():
                     rate.sleep()
+                    pending = [n for n in get_node_names() if n in self.NODES]
+                    try:
+                        pending.remove("/rosout")
+                    except ValueError:
+                        pass
+                    try:
+                        pending.remove(rospy.get_name())
+                    except ValueError:
+                        pass
                     now = get_time()
-                if len(pending) > 1:
+                    test_status_message = pat.format(pending)
+                    if request_unstuck:
+                        request_unstuck = False
+                        raise UnstuckRequestError()
+                if pending:
                     raise LookupError("Failed to kill nodes " + str(pending))
 
     def _wait_for_interfaces(self, timeout=10.0):
@@ -518,6 +564,9 @@ class TestTracer(unittest.TestCase):
             while now < end and not pub.ready and not rospy.is_shutdown():
                 rate.sleep()
                 now = get_time()
+                if request_unstuck:
+                    request_unstuck = False
+                    raise UnstuckRequestError()
             if now >= end and not rospy.is_shutdown():
                 raise LookupError(
                     "Failed to connect to topic: " + str(pub.resolved_name))
@@ -527,6 +576,9 @@ class TestTracer(unittest.TestCase):
             while now < end and not sub.ready and not rospy.is_shutdown():
                 rate.sleep()
                 now = get_time()
+                if request_unstuck:
+                    request_unstuck = False
+                    raise UnstuckRequestError()
             if now >= end and not rospy.is_shutdown():
                 raise LookupError(
                     "Failed to connect to topic: " + str(sub.resolved_name))

@@ -180,6 +180,10 @@ EvalScope = namedtuple("EvalScope", ("events", "state",))
 # Test Tracer
 ################################################################################
 
+class UnstuckRequestError(Exception):
+    def __init__(self):
+        super(UnstuckRequestError, self).__init__("received unstuck request")
+
 class InconclusiveTestError(Exception):
     @classmethod
     def timeout(cls):
@@ -314,14 +318,21 @@ class TestSubscriber(object):
 mode_random = False
 test_status_running = False
 test_status_message = 'Uninitialized'
+request_unstuck = False
 
 def _status_srv_callback(_req):
     return std_srvs.TriggerResponse(test_status_running, test_status_message)
 
+def _unstuck_srv_callback(_req):
+    global request_unstuck
+    request_unstuck = True
+    return std_srvs.EmptyResponse()
+
 def main(args):
     # {{ property_text }}
     rospy.init_node('property_tester', log_level=rospy.{{ log_level }})
-    srv = rospy.Service('status', std_srvs.Trigger, _status_srv_callback)
+    srv1 = rospy.Service('~status', std_srvs.Trigger, _status_srv_callback)
+    srv2 = rospy.Service('~unstuck', std_srvs.Empty, _unstuck_srv_callback)
     if args:
         if args[0] == 'random':
             global mode_random
