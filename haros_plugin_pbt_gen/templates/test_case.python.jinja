@@ -376,7 +376,7 @@ class TestTracer(unittest.TestCase):
             time_now = get_time()
             self._update(time_now=time_now)
             # self._check_outcome(trace)
-            test_status_message = 'Example - Wait'
+            test_status_message = 'Example #{} - Wait'.format(self.n_examples)
             while time_now < self.deadline and mon.is_falsifiable_state:
                 rate.sleep()
                 time_now = get_time()
