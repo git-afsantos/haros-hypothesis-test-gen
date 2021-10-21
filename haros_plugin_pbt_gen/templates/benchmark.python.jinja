@@ -91,7 +91,7 @@ def main():
     this_file = os.path.basename(__file__)
     try:
         for root, directories, filenames in os.walk(this_dir):
-            for filename in filenames:
+            for filename in sorted(filenames):
                 if filename.endswith(".py"):
                     if filename == this_file:
                         continue
