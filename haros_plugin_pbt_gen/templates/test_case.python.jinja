@@ -388,7 +388,7 @@ class TestTracer(unittest.TestCase):
 {% if main_monitor.is_existence and not main_monitor.has_scope_timeout -%}
             if mon.verdict is not True:
                 self.witness = []
-                assert False
+                assert False, mon.HPL_PROPERTY
 {%- endif %}
             passed = True
             print("[Example #{}]: OK".format(self.n_examples))
