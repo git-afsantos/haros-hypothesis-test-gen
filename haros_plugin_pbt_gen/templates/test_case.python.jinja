@@ -385,6 +385,11 @@ class TestTracer(unittest.TestCase):
                     request_unstuck = False
                     raise UnstuckRequestError()
             assert mon.verdict is not False, mon.HPL_PROPERTY
+{% if main_monitor.is_existence and not main_monitor.has_scope_timeout -%}
+            if mon.verdict is not True:
+                self.witness = []
+                assert False
+{%- endif %}
             passed = True
             print("[Example #{}]: OK".format(self.n_examples))
         except AssertionError as e:
