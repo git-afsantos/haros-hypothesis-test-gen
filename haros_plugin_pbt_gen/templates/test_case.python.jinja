@@ -105,6 +105,7 @@ def _setup_test(self):
     self.n_scopes = 0
     self.monitor_active = False
     self.fail_time = None
+    self.early_success = False
 {% endmacro %}
 
 
@@ -457,29 +458,30 @@ class TestTracer(unittest.TestCase):
     def _update(self, time_now=None):
         if rospy.is_shutdown():
             raise InconclusiveTestError.rospy_shutdown()
+        if self.early_success:
+            raise EarlySuccess()
         for launch in self.launches:
             launch.spin_once()
         if time_now is None:
             time_now = get_time()
         for monitor in self.monitors:
             monitor.on_timer(time_now)
+            assert not monitor.verdict is False, monitor.HPL_PROPERTY
         for monitor in self.axioms:
             monitor.on_timer(time_now)
+            assume(monitor.verdict is not False)
 
 {# {{ _check_outcome(is_liveness)|indent(width=4, first=true) }} #}
 
     def _on_early_success(self, time, witness):
         # called only for the main monitor
-        raise EarlySuccess()
+        self.early_success = True
 
     def _on_property_violation(self, monitor, is_axiom, time, witness):
         self.witness = witness
         self.fail_time = time
         if is_axiom:
             self.assumptions_ok = False
-            assume(False)
-        else:
-            assert False, monitor.HPL_PROPERTY
 
     def _on_enter_scope(self, time):
         # called only for the main monitor
