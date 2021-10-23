@@ -594,10 +594,9 @@ class StrategyManager(object):
         for schema in schemas:
             for seg in schema.segments:
                 for strategy in iterchain(seg.published, seg.spam.values()):
-                    if strategy.is_default:
-                        ros_type, x = self.open_topics[strategy.topic]
-                        self._default_msg_for_type(default_strategies, ros_type)
-                    else:
+                    ros_type, x = self.open_topics[strategy.topic]
+                    self._default_msg_for_type(default_strategies, ros_type)
+                    if not strategy.is_default:
                         custom_msg_strategies.append(strategy)
                     if strategy.alias is not None:
                         aliases.append(strategy.alias)
