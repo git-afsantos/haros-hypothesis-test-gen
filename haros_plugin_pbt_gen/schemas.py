@@ -552,7 +552,9 @@ def _minimal_schemas(prop):
     elif prop.pattern.is_existence:
         pass
     elif prop.pattern.is_requirement:
-        pass
+        # FIXME: not sure if this is correct
+        if prop.pattern.has_max_time:
+            _ensure_event(prop.pattern.trigger, prop.pattern.max_time, INF, builders, 'u0_schema')
     elif prop.pattern.is_response or prop.pattern.is_prevention:
         _avoid_event(prop.pattern.trigger, builders)
         _avoid_event(prop.scope.terminator, builders)
