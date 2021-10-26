@@ -7,6 +7,7 @@
 {% set TIME_INF = 1000 %}
 {% set MAX_SPAM = 3 %}
 {% set MIN_TICK = 10 %} {# ms #}
+{% set DOUBLE_TICK = MIN_TICK * 2 %} {# ms #}
 
 {% macro _ordinal(n) -%}
   {% if n == 11 or n == 12 or n == 13 -%}
@@ -79,6 +80,9 @@ spam = draw({{ _spam_name(schema, i) }}(trace))
 for msg, topic in spam:
     if timestamps[{{ i + 1 }}] < {{ MIN_TICK }}:
         timestamp = 0
+    elif timestamps[{{ i + 1 }}] < {{ DOUBLE_TICK }}:
+        timestamp = draw(strategies.sampled_from((0, {{ MIN_TICK }}, {# -#}
+            timestamps[{{ i + 1 }}]/2, timestamps[{{ i + 1 }}])))
     else:
         timestamp = draw(strategies.sampled_from((0, {{ MIN_TICK }}, {# -#}
             timestamps[{{ i + 1 }}])))
@@ -143,7 +147,7 @@ timestamps.append({{ TIME_INF }})
 timestamp = {{ segment.lower_bound }}
 {%- else -%}
 timestamp = draw(strategies.sampled_from(({# -#}
-    {{ segment.lower_bound }},
+    {{ segment.lower_bound }},{# -#}
     {% if delta > 2 -%}
     {#- #} {{ segment.lower_bound + (delta // 2) }},
     {%- endif -%}
