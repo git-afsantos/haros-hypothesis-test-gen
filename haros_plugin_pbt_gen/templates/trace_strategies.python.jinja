@@ -143,11 +143,11 @@ timestamps.append({{ TIME_INF }})
 timestamp = {{ segment.lower_bound }}
 {%- else -%}
 timestamp = draw(strategies.sampled_from(({# -#}
-    {{ segment.lower_bound }}, {# -#}
+    {{ segment.lower_bound }},
     {% if delta > 2 -%}
-    {{ segment.lower_bound + (delta // 2) }}, {# -#}
+    {#- #} {{ segment.lower_bound + (delta // 2) }},
     {%- endif -%}
-    {{ max_time - 1 }}{# -#}
+    {#- #} {{ max_time - 1 }}{# -#}
 )))
 {%- endif %}
 {%- endmacro %}
